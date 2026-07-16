@@ -1,0 +1,4 @@
+@media (max-width: 560px) {
+  .workspace-intro::after { display: none; }
+  .workspace-intro h1 { font-size: 43px; letter-spacing: -2px; }
+}
