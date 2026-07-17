@@ -6,6 +6,7 @@ async function request(path, options) {
 }
 
 export const getPrograms = () => request('/api/programs')
+export const getCities = () => request('/api/cities')
 
 export const searchPrograms = (filters) => request('/api/search', {
   method: 'POST',
@@ -17,4 +18,10 @@ export const getNets = (programCode, year = 2025) => request('/api/nets', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ programCode, year }),
+})
+
+export const askAdvisor = (payload) => request('/api/advisor', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(payload),
 })
