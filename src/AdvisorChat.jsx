@@ -3,9 +3,11 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   Bot,
+  Check,
   ChevronDown,
   ExternalLink,
   GraduationCap,
+  Info,
   LoaderCircle,
   MessageCircle,
   RefreshCw,
@@ -18,7 +20,6 @@ import { askAdvisor } from './api'
 
 const SCORE_TYPES = ['TYT', 'SAY', 'EA', 'SÖZ', 'DİL']
 const emptyRanks = () => Object.fromEntries(SCORE_TYPES.map((type) => [type, '']))
-const rankFormat = new Intl.NumberFormat('tr-TR')
 
 const ADVISOR_COPY = {
   tr: {
@@ -29,6 +30,7 @@ const ADVISOR_COPY = {
     profile: 'Aday profili',
     profileHelp: 'Ne kadar çok bilgi verirsen öneriler o kadar anlamlı olur.',
     privacy: 'Profilin ve mesajların yanıt için OpenAI’a iletilir; Pusula bunları kaydetmez. Telefon veya e-posta gibi gereksiz kişisel bilgileri yazma.',
+    privacyLabel: 'Gizlilik bilgisi',
     interests: 'İlgi alanların',
     interestsPlaceholder: 'Örn. kod yazmak, matematik, insanlara yardım etmek, tasarım...',
     rankings: 'Başarı sıraların',
@@ -42,6 +44,7 @@ const ADVISOR_COPY = {
     public: 'Devlet',
     foundation: 'Vakıf',
     useFilters: 'Sayfadaki seçimleri kullan',
+    filtersApplied: 'Seçimler aktarıldı',
     findOptions: 'Bana seçenek bul',
     welcome: 'Merhaba! Bugün sana nasıl yardımcı olabilirim? Bölüm seçimi, başarı sıralaman, şehirler veya üniversiteler hakkında aklına geleni sorabilirsin.',
     placeholder: 'Örn. 50 bin SAY ile Ankara’da hangi seçeneklere bakmalıyım?',
@@ -73,6 +76,7 @@ const ADVISOR_COPY = {
     profile: 'Candidate profile',
     profileHelp: 'More context makes the recommendations more meaningful.',
     privacy: 'Your profile and messages are sent to OpenAI for the reply; Pusula does not save them. Do not include unnecessary phone numbers or email addresses.',
+    privacyLabel: 'Privacy information',
     interests: 'Your interests',
     interestsPlaceholder: 'e.g. coding, mathematics, helping people, design...',
     rankings: 'Your rankings',
@@ -86,6 +90,7 @@ const ADVISOR_COPY = {
     public: 'Public',
     foundation: 'Foundation',
     useFilters: 'Use page selections',
+    filtersApplied: 'Selections applied',
     findOptions: 'Find options for me',
     welcome: 'Hi! How can I help today? Ask about programs, your ranking, cities, or universities and we can work through the choice together.',
     placeholder: 'e.g. What should I consider with a 50k SAY ranking in Ankara?',
@@ -124,32 +129,23 @@ function createProfile(currentFilters) {
     interests: '',
     ranks: normalizeRankState(currentFilters.ranks),
     cities: currentFilters.cities.map((city) => city.ilAdi).join(', '),
+    cityCodes: currentFilters.cities.map((city) => city.ilKodu),
     language: currentFilters.language || 'ALL',
     universityType: currentFilters.universityType || 'ALL',
+    selectedPrograms: [...currentFilters.programs],
   }
 }
 
-function RecommendationCard({ item, c }) {
-  const fitLabel = c[item.fit] || c.neutral
-  return (
-    <a
-      className={`advisor-recommendation ${item.fit}`}
-      href={`https://yokatlas.yok.gov.tr/lisans.php?y=${item.code}`}
-      target="_blank"
-      rel="noreferrer"
-    >
-      <div>
-        <span>{fitLabel} · {item.scoreType}</span>
-        <strong>{item.university}</strong>
-        <p>{item.program}</p>
-      </div>
-      <div className="advisor-recommendation-meta">
-        <span>{item.city}</span>
-        <b>{item.rank ? `#${rankFormat.format(item.rank)}` : '—'}</b>
-        <ExternalLink size={13} aria-label={c.openAtlas} />
-      </div>
-    </a>
-  )
+function createEmptyProfile() {
+  return {
+    interests: '',
+    ranks: emptyRanks(),
+    cities: '',
+    cityCodes: [],
+    language: 'ALL',
+    universityType: 'ALL',
+    selectedPrograms: [],
+  }
 }
 
 function MarkdownMessage({ content }) {
@@ -176,12 +172,16 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
   const [profileError, setProfileError] = useState('')
+  const [filtersSynced, setFiltersSynced] = useState(false)
   const messagesRef = useRef(null)
   const textareaRef = useRef(null)
+  const advisorAbortRef = useRef(null)
+  const requestIdRef = useRef(0)
+  const syncFeedbackTimerRef = useRef(null)
 
   const selectedProgramNames = useMemo(
-    () => currentFilters.programs.map((program) => program.birimGrupAdi),
-    [currentFilters.programs],
+    () => (profile.selectedPrograms || []).map((program) => program.birimGrupAdi),
+    [profile.selectedPrograms],
   )
 
   useEffect(() => {
@@ -202,22 +202,45 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
     messagesRef.current.scrollTop = messagesRef.current.scrollHeight
   }, [messages, loading, open])
 
+  useEffect(() => () => {
+    advisorAbortRef.current?.abort()
+    if (syncFeedbackTimerRef.current) window.clearTimeout(syncFeedbackTimerRef.current)
+  }, [])
+
   const syncPageFilters = () => {
     setProfile((current) => ({
       ...current,
       ranks: normalizeRankState(currentFilters.ranks),
       cities: currentFilters.cities.map((city) => city.ilAdi).join(', '),
+      cityCodes: currentFilters.cities.map((city) => city.ilKodu),
       language: currentFilters.language || 'ALL',
       universityType: currentFilters.universityType || 'ALL',
+      selectedPrograms: [...currentFilters.programs],
     }))
     setProfileError('')
+    setFiltersSynced(true)
+    if (syncFeedbackTimerRef.current) window.clearTimeout(syncFeedbackTimerRef.current)
+    syncFeedbackTimerRef.current = window.setTimeout(() => {
+      setFiltersSynced(false)
+      syncFeedbackTimerRef.current = null
+    }, 2000)
   }
 
   const resetConversation = () => {
+    advisorAbortRef.current?.abort()
+    advisorAbortRef.current = null
+    requestIdRef.current += 1
     setMessages([])
     setMessage('')
+    setProfile(createEmptyProfile())
+    setLoading(false)
     setProfileOpen(true)
     setProfileError('')
+    setFiltersSynced(false)
+    if (syncFeedbackTimerRef.current) {
+      window.clearTimeout(syncFeedbackTimerRef.current)
+      syncFeedbackTimerRef.current = null
+    }
   }
 
   const sendMessage = async (text = message, intent = 'chat') => {
@@ -228,6 +251,11 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
     setMessage('')
     setProfileOpen(false)
     setLoading(true)
+    advisorAbortRef.current?.abort()
+    const controller = new AbortController()
+    advisorAbortRef.current = controller
+    const requestId = requestIdRef.current + 1
+    requestIdRef.current = requestId
     const userMessage = { role: 'user', content }
     const history = messages.map(({ role, content: previousContent }) => ({
       role,
@@ -236,11 +264,10 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
     const previousRecommendationCodes = [...new Set(
       messages.flatMap((item) =>
         (item.recommendations || []).map((recommendation) => String(recommendation.code))),
-    )].slice(-25)
+    )].slice(-64)
     setMessages((current) => [...current, userMessage])
 
     try {
-      const currentCityText = currentFilters.cities.map((city) => city.ilAdi).join(', ')
       const data = await askAdvisor({
         message: content,
         intent,
@@ -249,12 +276,11 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
         previousRecommendationCodes,
         profile: {
           ...profile,
-          cityCodes: profile.cities.trim() === currentCityText
-            ? currentFilters.cities.map((city) => city.ilKodu)
-            : [],
-          selectedPrograms: currentFilters.programs,
+          cityCodes: profile.cityCodes || [],
+          selectedPrograms: profile.selectedPrograms || [],
         },
-      })
+      }, controller.signal)
+      if (controller.signal.aborted || requestIdRef.current !== requestId) return
       setMessages((current) => [...current, {
         role: 'assistant',
         content: data.answer,
@@ -265,6 +291,7 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
       }])
       setProfileOpen(false)
     } catch (error) {
+      if (controller.signal.aborted || requestIdRef.current !== requestId) return
       setMessages((current) => [...current, {
         role: 'assistant',
         content: error.message || c.error,
@@ -273,13 +300,16 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
         error: true,
       }])
     } finally {
-      setLoading(false)
-      window.setTimeout(() => textareaRef.current?.focus(), 50)
+      if (requestIdRef.current === requestId) {
+        advisorAbortRef.current = null
+        setLoading(false)
+        window.setTimeout(() => textareaRef.current?.focus(), 50)
+      }
     }
   }
 
   const submitProfile = () => {
-    if (!profile.interests.trim() && !currentFilters.programs.length) {
+    if (!profile.interests.trim() && !(profile.selectedPrograms || []).length) {
       setProfileOpen(true)
       setProfileError(c.needProfile)
       return
@@ -304,13 +334,26 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
       )}
 
       {open && (
-        <section className="advisor-panel" role="dialog" aria-label={c.title}>
+        <section className={`advisor-panel ${profileOpen ? 'profile-open' : 'chat-open'}`} role="dialog" aria-label={c.title}>
           <header className="advisor-header">
             <div className="advisor-identity">
               <span><img src="/favicon.png?v=2" alt="" /></span>
               <div><strong>{c.title}</strong><small>{c.subtitle}</small></div>
             </div>
             <div className="advisor-header-actions">
+              <div className="advisor-privacy-control">
+                <button
+                  type="button"
+                  className="advisor-privacy-button"
+                  aria-label={c.privacyLabel}
+                  aria-describedby="advisor-privacy-tooltip"
+                >
+                  <Info size={15} />
+                </button>
+                <span id="advisor-privacy-tooltip" className="advisor-privacy-tooltip" role="tooltip">
+                  {c.privacy}
+                </span>
+              </div>
               <button type="button" aria-label={c.reset} title={c.reset} onClick={resetConversation}><RefreshCw size={15} /></button>
               <button type="button" aria-label={c.close} onClick={() => setOpen(false)}><X size={18} /></button>
             </div>
@@ -330,7 +373,6 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
               <div className="advisor-profile-heading">
                 <div><GraduationCap size={18} /><strong>{c.profile}</strong></div>
                 <p>{c.profileHelp}</p>
-                <small>{c.privacy}</small>
               </div>
 
               <label className="advisor-interest-field">
@@ -370,7 +412,11 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
                 <input
                   value={profile.cities}
                   placeholder={c.citiesPlaceholder}
-                  onChange={(event) => setProfile((current) => ({ ...current, cities: event.target.value }))}
+                  onChange={(event) => setProfile((current) => ({
+                    ...current,
+                    cities: event.target.value,
+                    cityCodes: [],
+                  }))}
                 />
               </label>
 
@@ -395,7 +441,10 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
 
               {profileError && <p className="advisor-profile-error">{profileError}</p>}
               <div className="advisor-profile-actions">
-                <button type="button" className="advisor-sync" onClick={syncPageFilters}><RefreshCw size={13} /> {c.useFilters}</button>
+                <button type="button" className="advisor-sync" onClick={syncPageFilters}>
+                  {filtersSynced ? <Check size={13} /> : <RefreshCw size={13} />}
+                  {filtersSynced ? c.filtersApplied : c.useFilters}
+                </button>
                 <button type="button" className="advisor-start" onClick={submitProfile} disabled={loading}><Sparkles size={14} /> {c.findOptions}</button>
               </div>
             </div>
@@ -416,15 +465,6 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
                       ? <MarkdownMessage content={item.content} />
                       : <p>{item.content}</p>}
                   </div>
-                  {item.recommendations?.length > 0 && (
-                    <div className="advisor-recommendations">
-                      {item.recommendations
-                        .slice(0, 5)
-                        .map((recommendation) => (
-                          <RecommendationCard item={recommendation} c={c} key={recommendation.code} />
-                        ))}
-                    </div>
-                  )}
                   {item.sources?.length > 0 && (
                     <div className="advisor-sources">
                       <span>{c.sources}</span>
