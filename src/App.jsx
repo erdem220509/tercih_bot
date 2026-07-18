@@ -155,9 +155,9 @@ function yearData(row) {
 
 function matchStatus(userRank, cutoffRank, c) {
   if (!userRank || !cutoffRank) return null
-  const ratio = Number(userRank) / Number(cutoffRank)
-  if (ratio <= 0.85) return { label: c.safer, tone: 'safe' }
-  if (ratio <= 1.08) return { label: c.match, tone: 'match' }
+  const difference = Number(cutoffRank) - Number(userRank)
+  if (Math.abs(difference) <= 300) return { label: c.match, tone: 'match' }
+  if (difference > 300) return { label: c.safer, tone: 'safe' }
   return { label: c.reach, tone: 'reach' }
 }
 
@@ -637,10 +637,18 @@ export default function App() {
       const textMatch = !needle || `${row.universiteAdi} ${row.fymkAdi || ''}`.toLocaleLowerCase('tr-TR').includes(needle)
       return languageMatch && textMatch
     })
-    return filtered.sort((a, b) => sort === 'SCORE_DESC'
-      ? (Number(b.minPuan) || -Infinity) - (Number(a.minPuan) || -Infinity)
-      : (Number(a.basariSirasi) || Infinity) - (Number(b.basariSirasi) || Infinity)
-        || (Number(b.minPuan) || -Infinity) - (Number(a.minPuan) || -Infinity))
+    return filtered.sort((a, b) => {
+      if (sort === 'SCORE_DESC') {
+        return (Number(b.minPuan) || -Infinity) - (Number(a.minPuan) || -Infinity)
+      }
+
+      const aRank = Number(a.basariSirasi) || (sort === 'RANK_DESC' ? -Infinity : Infinity)
+      const bRank = Number(b.basariSirasi) || (sort === 'RANK_DESC' ? -Infinity : Infinity)
+      const rankDifference = sort === 'RANK_DESC' ? bRank - aRank : aRank - bRank
+
+      return rankDifference
+        || (Number(b.minPuan) || -Infinity) - (Number(a.minPuan) || -Infinity)
+    })
   }, [results, appliedTeachingLanguage, resultQuery, sort])
 
   const toggleProgram = (program) => {
@@ -672,6 +680,10 @@ export default function App() {
     setAppliedRanks({ ...userRanks })
     setHasSearched(true)
     runSearch(selectedPrograms, universityType, selectedCities)
+  }
+
+  const toggleRankSort = () => {
+    setSort((current) => current === 'RANK_ASC' ? 'RANK_DESC' : 'RANK_ASC')
   }
 
   return (
@@ -764,7 +776,14 @@ export default function App() {
               <div className="result-tools">
                 <label className="within-search"><Search size={15} /><input value={resultQuery} onChange={(event) => setResultQuery(event.target.value)} placeholder={c.universityOrCity} /></label>
                 <div className="sort-switch" aria-label={`${c.rank} / ${c.score}`}>
-                  <button className={sort === 'RANK_ASC' ? 'active' : ''} type="button" onClick={() => setSort('RANK_ASC')}>{c.rank} <ArrowUp size={13} /></button>
+                  <button
+                    className={sort === 'RANK_ASC' || sort === 'RANK_DESC' ? 'active' : ''}
+                    type="button"
+                    onClick={toggleRankSort}
+                    aria-pressed={sort === 'RANK_ASC' || sort === 'RANK_DESC'}
+                  >
+                    {c.rank} {sort === 'RANK_DESC' ? <ArrowDown size={13} /> : <ArrowUp size={13} />}
+                  </button>
                   <button className={sort === 'SCORE_DESC' ? 'active' : ''} type="button" onClick={() => setSort('SCORE_DESC')}>{c.score} <ArrowDown size={13} /></button>
                 </div>
               </div>

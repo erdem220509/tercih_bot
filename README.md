@@ -18,6 +18,38 @@ npm run build
 npm start
 ```
 
+## Firebase deployment
+
+The production site uses Firebase Hosting for the Vite build and a second-generation Cloud Function
+for the Express API. Hosting rewrites `/api/**` to the function, so the browser and API stay on the
+same origin.
+
+Prerequisites:
+
+- Enable billing (the Blaze plan) for the Firebase project. Second-generation functions require it.
+- Authenticate once with `npm run firebase:login`.
+- Select the intended project with `npx firebase use --add`.
+
+Store the OpenAI API key in Firebase Secret Manager, then deploy:
+
+```bash
+npx firebase functions:secrets:set OPENAI_API_KEY
+npm run deploy
+```
+
+For later releases, `npm run deploy` is the only command needed. It creates a fresh production build,
+deploys both Hosting and the `api` function to the project selected in `.firebaserc`, suppresses verbose
+Firebase request logging, and applies the local IPv4 DNS workaround only if this network needs it.
+
+Do not create `functions/.env` with the production key. The `api` function is explicitly bound to the
+`OPENAI_API_KEY` secret, runs in `europe-west3`, and has a maximum instance count to constrain runaway
+cost. Also configure an OpenAI project budget and Google Cloud budget alerts.
+
+After the first deployment, connect the Squarespace-managed domain from Firebase Console under
+Hosting > Add custom domain. Copy the exact records Firebase shows into Squarespace DNS; do not guess
+the A, TXT, or CNAME values. Keep the default `web.app` address available until DNS and the managed
+TLS certificate show as connected.
+
 ## University advisor
 
 The advisor uses OpenAI's Responses API with GPT-5.6 Luna at medium reasoning effort. University

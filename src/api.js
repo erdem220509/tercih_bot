@@ -20,8 +20,9 @@ export const getNets = (programCode, year = 2025) => request('/api/nets', {
   body: JSON.stringify({ programCode, year }),
 })
 
-export const askAdvisor = (payload) => request('/api/advisor', {
+export const askAdvisor = (payload, signal) => request('/api/advisor', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(payload),
+  signal,
 })
