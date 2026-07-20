@@ -17,6 +17,7 @@
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "openai": "^6.48.0",
+    "posthog-js": "^1.404.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",

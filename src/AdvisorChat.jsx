@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import posthog from 'posthog-js'
 import {
   Bot,
   Check,
@@ -249,6 +250,10 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
     const content = String(text || '').trim()
     if (!content || loading) return
 
+    posthog.capture('advisor_message_sent', {
+      intent,
+      message_turn: messages.length + 1,
+    })
     setProfileError('')
     setMessage('')
     setProfileOpen(false)
@@ -336,6 +341,13 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
       setProfileError(c.needProfile)
       return
     }
+    posthog.capture('advisor_profile_submitted', {
+      has_interests: profile.interests.trim().length > 0,
+      has_ranking: SCORE_TYPES.some((type) => Number(profile.ranks[type]) > 0),
+      program_count: (profile.selectedPrograms || []).length,
+      teaching_language: profile.language,
+      university_type: profile.universityType,
+    })
     sendMessage(c.profileQuestion, 'recommend')
   }
 
@@ -348,7 +360,7 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
   return (
     <div className={`advisor-shell ${open ? 'is-open' : ''}`}>
       {!open && (
-        <button className="advisor-launcher" type="button" aria-label={c.launcher} onClick={() => setOpen(true)}>
+        <button className="advisor-launcher" type="button" aria-label={c.launcher} onClick={() => { posthog.capture('advisor_opened'); setOpen(true) }}>
           <span><Sparkles size={16} /></span>
           <strong>{c.launcher}</strong>
           <MessageCircle size={18} />
@@ -521,7 +533,10 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
               <button
                 type="button"
                 key={prompt.label}
-                onClick={() => sendMessage(prompt.label, prompt.intent)}
+                onClick={() => {
+                  posthog.capture('advisor_quick_prompt_clicked', { intent: prompt.intent })
+                  sendMessage(prompt.label, prompt.intent)
+                }}
                 disabled={loading}
               >
                 {prompt.label}
