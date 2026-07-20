@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import posthog from 'posthog-js'
 import {
   ArrowDown,
   ArrowUp,
@@ -716,9 +717,14 @@ export default function App() {
 
   const toggleProgram = (program) => {
     const key = programKey(program)
-    const next = selectedPrograms.some((item) => programKey(item) === key)
+    const isRemoving = selectedPrograms.some((item) => programKey(item) === key)
+    const next = isRemoving
       ? selectedPrograms.filter((item) => programKey(item) !== key)
       : [...selectedPrograms, program]
+    posthog.capture('program_selected', {
+      action: isRemoving ? 'removed' : 'added',
+      score_type: program.puanTuru,
+    })
     setSelectedPrograms(next)
   }
 
@@ -739,18 +745,26 @@ export default function App() {
 
   const toggleFavoriteProgram = (row) => {
     const key = favoriteProgramKey(row)
-    setFavoritePrograms((current) => current.some((item) => item.key === key)
-      ? current.filter((item) => item.key !== key)
-      : [...current, {
-        key,
-        code: key,
-        university: row.universiteAdi,
-        program: row.birimAdi,
-        scholarship: row.bursOraniAdi || null,
+    setFavoritePrograms((current) => {
+      const isSaved = current.some((item) => item.key === key)
+      posthog.capture(isSaved ? 'program_unsaved' : 'program_saved', {
+        university_type: row.universiteTuru,
+        score_type: row.puanTuru,
         city: row.ilAdi,
-        type: row.universiteTuru,
-        savedAt: new Date().toISOString(),
-      }])
+      })
+      return isSaved
+        ? current.filter((item) => item.key !== key)
+        : [...current, {
+          key,
+          code: key,
+          university: row.universiteAdi,
+          program: row.birimAdi,
+          scholarship: row.bursOraniAdi || null,
+          city: row.ilAdi,
+          type: row.universiteTuru,
+          savedAt: new Date().toISOString(),
+        }]
+    })
   }
 
   const explore = () => {
@@ -758,6 +772,13 @@ export default function App() {
     setAppliedTeachingLanguage(teachingLanguage)
     setAppliedRanks({ ...userRanks })
     setHasSearched(true)
+    posthog.capture('program_search_submitted', {
+      program_count: selectedPrograms.length,
+      city_count: selectedCities.length,
+      university_type: universityType,
+      teaching_language: teachingLanguage,
+      has_ranking: SCORE_TYPES.some((type) => Number(userRanks[type]) > 0),
+    })
     runSearch(selectedPrograms, universityType, selectedCities)
   }
 
@@ -777,6 +798,11 @@ export default function App() {
     setSort((current) => current === 'RANK_ASC' ? 'RANK_DESC' : 'RANK_ASC')
   }
 
+  const switchUiLanguage = (lang) => {
+    posthog.capture('ui_language_switched', { language: lang })
+    setUiLanguage(lang)
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -785,10 +811,10 @@ export default function App() {
           Pusula
         </a>
         <div className="ui-language" aria-label="Interface language">
-          <button type="button" className={uiLanguage === 'tr' ? 'active' : ''} aria-label="Türkçe" onClick={() => setUiLanguage('tr')}>
+          <button type="button" className={uiLanguage === 'tr' ? 'active' : ''} aria-label="Türkçe" onClick={() => switchUiLanguage('tr')}>
             <LanguageFlag country="tr" /><small>TR</small>
           </button>
-          <button type="button" className={uiLanguage === 'en' ? 'active' : ''} aria-label="English" onClick={() => setUiLanguage('en')}>
+          <button type="button" className={uiLanguage === 'en' ? 'active' : ''} aria-label="English" onClick={() => switchUiLanguage('en')}>
             <LanguageFlag country="gb" /><small>EN</small>
           </button>
         </div>
@@ -835,7 +861,10 @@ export default function App() {
           <ProgramPicker programs={programs} selected={selectedPrograms} onToggle={toggleProgram} loading={catalogLoading} c={c} />
           <RankPicker
             values={userRanks}
-            onChange={(type, value) => setUserRanks((current) => ({ ...current, [type]: value }))}
+            onChange={(type, value) => {
+              if (value) posthog.capture('ranking_entered', { score_type: type })
+              setUserRanks((current) => ({ ...current, [type]: value }))
+            }}
             onClear={() => setUserRanks(emptyRanks())}
             c={c}
           />
@@ -886,7 +915,7 @@ export default function App() {
                   type="button"
                   aria-pressed={showSavedOnly}
                   title={c.savedOnly}
-                  onClick={() => setShowSavedOnly((value) => !value)}
+                  onClick={() => { posthog.capture('saved_filter_toggled', { enabled: !showSavedOnly }); setShowSavedOnly((value) => !value) }}
                 >
                   <Heart size={15} fill={showSavedOnly ? 'currentColor' : 'none'} />
                   <span>{c.savedUniversities}</span>
@@ -917,7 +946,11 @@ export default function App() {
                     row={row}
                     userRanks={appliedRanks}
                     expanded={expanded === row.kilavuzKodu}
-                    onToggle={() => setExpanded(expanded === row.kilavuzKodu ? null : row.kilavuzKodu)}
+                    onToggle={() => {
+                      const isOpening = expanded !== row.kilavuzKodu
+                      if (isOpening) posthog.capture('program_result_expanded', { university_type: row.universiteTuru, score_type: row.puanTuru, city: row.ilAdi })
+                      setExpanded(expanded === row.kilavuzKodu ? null : row.kilavuzKodu)
+                    }}
                     favorite={favoriteKeys.has(favoriteProgramKey(row))}
                     onFavorite={() => toggleFavoriteProgram(row)}
                     c={c}
