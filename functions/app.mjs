@@ -1,8 +1,13 @@
 import 'dotenv/config'
+import crypto from 'node:crypto'
 import express from 'express'
 import OpenAI from 'openai'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { getApps, initializeApp } from 'firebase-admin/app'
+import { FieldValue, getFirestore } from 'firebase-admin/firestore'
+
+if (!getApps().length) initializeApp()
 
 const app = express()
 const PORT = Number(process.env.PORT || 8787)
@@ -16,6 +21,10 @@ const ADVISOR_GLOBAL_HOURLY_LIMIT = Math.max(
   ADVISOR_IP_LIMIT,
   Number(process.env.ADVISOR_GLOBAL_HOURLY_LIMIT) || 200,
 )
+const REVIEW_WINDOW_MS = 60 * 60 * 1000
+const REVIEW_IP_LIMIT = Math.max(1, Number(process.env.REVIEW_IP_LIMIT) || 5)
+const REVIEW_FIELDS = ['dorms', 'professors', 'campus', 'socialLife']
+const USE_LOCAL_REVIEW_STORE = !IS_PRODUCTION && !process.env.FIRESTORE_EMULATOR_HOST
 const TRUSTED_APP_ORIGINS = new Set(
   String(process.env.APP_ORIGIN || '')
     .split(',')
@@ -55,6 +64,8 @@ app.use((_req, res, next) => {
 const cache = new Map()
 const advisorRateLimit = new Map()
 const advisorGlobalRateLimit = { startedAt: Date.now(), count: 0 }
+const reviewRateLimit = new Map()
+const localReviewStore = new Map()
 
 const INTEREST_PROGRAMS = [
   {
@@ -199,6 +210,100 @@ function inferAdvisorIntent(message, requestedIntent = 'chat') {
   return 'chat'
 }
 
+function parseAdvisorRanking(message) {
+  const text = normalizeText(message).replaceAll(',', '.')
+  const numberPattern = '(?<number>\\d{1,3}(?:[.\\s]\\d{3})+|\\d{1,7})'
+  const patterns = [
+    new RegExp(`${numberPattern}\\s*(?<suffix>bin|k)?\\s*(?:siralam\\w*|sira\\w*|rank\\w*)`),
+    new RegExp(`${numberPattern}\\s*(?<suffix>bin|k)?\\s*(?:tyt|say|ea|soz|dil)\\b`),
+    new RegExp(`\\b(?:tyt|say|ea|soz|dil)\\b[^\\d]{0,12}${numberPattern}\\s*(?<suffix>bin|k)?`),
+    new RegExp(`(?:siralam\\w*|sira\\w*|rank\\w*)[^\\d]{0,24}${numberPattern}\\s*(?<suffix>bin|k)?`),
+  ]
+  const recommendationNounAfterNumber = /^\s*(?:universite\w*|program\w*|bolum\w*|tercih\w*|secenek\w*|oneri\w*|suggestion\w*|recommendation\w*)\b/
+  const match = patterns
+    .map((pattern) => text.match(pattern))
+    .find((candidate) => {
+      if (!candidate?.groups?.number) return false
+      const tail = text.slice((candidate.index || 0) + candidate[0].length)
+      return !recommendationNounAfterNumber.test(tail)
+    })
+  if (!match?.groups?.number) return null
+
+  const compact = match.groups.number.replace(/[.\s]/g, '')
+  let rank = Number(compact)
+  if (match.groups.suffix && rank < 1000) rank *= 1000
+  return Number.isInteger(rank) && rank >= 1 && rank <= 3_000_000 ? rank : null
+}
+
+function inferAdvisorRankOverride(message, profile = {}, contextScoreTypes = []) {
+  const rank = parseAdvisorRanking(message)
+  if (!rank) return null
+
+  const text = normalizeText(message)
+  const explicitType = text.match(/\b(tyt|say|ea|soz|dil)\b/)?.[1]
+  const typeMap = { tyt: 'TYT', say: 'SAY', ea: 'EA', soz: 'SÖZ', dil: 'DİL' }
+  let scoreType = typeMap[explicitType]
+
+  if (!scoreType) {
+    const previousTypes = [...new Set(contextScoreTypes.map(scoreTypeKey).filter(Boolean))]
+    const rankedTypes = Object.entries(profile.ranks || {})
+      .filter(([, value]) => Number(value) > 0)
+      .map(([type]) => scoreTypeKey(type))
+    const selectedTypes = [...new Set(
+      (Array.isArray(profile.selectedPrograms) ? profile.selectedPrograms : [])
+        .map((program) => scoreTypeKey(program.puanTuru))
+        .filter(Boolean),
+    )]
+    if (previousTypes.length === 1) scoreType = previousTypes[0]
+    else if (rankedTypes.length === 1) scoreType = rankedTypes[0]
+    else if (selectedTypes.length === 1) scoreType = selectedTypes[0]
+  }
+
+  return scoreType ? { scoreType, rank } : null
+}
+
+function resolveAdvisorIntent(message, requestedIntent, previousRecommendationCodes = []) {
+  const intent = inferAdvisorIntent(message, requestedIntent)
+  return intent === 'recommend' && previousRecommendationCodes.length ? 'more' : intent
+}
+
+function filterFreshAdvisorRows(rows, previousRecommendationCodes = [], previousRecommendationUniversities = []) {
+  const excludedCodes = new Set(previousRecommendationCodes.map(String))
+  const excludedUniversities = new Set(previousRecommendationUniversities.map(normalizeText))
+  return rows.filter((row) =>
+    !excludedCodes.has(String(row.code))
+    && !excludedUniversities.has(normalizeText(row.university)))
+}
+
+function advisorContinuationFloorByScore(rows, ranks, previousRecommendationContexts = []) {
+  const matchingContextCodes = new Set(
+    previousRecommendationContexts
+      .filter((context) => {
+        const scoreType = scoreTypeKey(context.scoreType)
+        return Number(context.candidateRank) > 0
+          && Number(context.candidateRank) === Number(ranks[scoreType])
+      })
+      .map((context) => String(context.code)),
+  )
+  const floorByScore = {}
+
+  for (const row of rows) {
+    const candidateRank = Number(ranks[row.scoreType])
+    if (
+      matchingContextCodes.has(String(row.code))
+      && candidateRank > 0
+      && row.rank > candidateRank + ADVISOR_MATCH_WINDOW
+    ) {
+      floorByScore[row.scoreType] = Math.max(
+        floorByScore[row.scoreType] || 0,
+        row.rank,
+      )
+    }
+  }
+
+  return floorByScore
+}
+
 function requestedAdvisorRecommendationCount(message, intent) {
   if (!['recommend', 'safer', 'more'].includes(intent)) return 0
 
@@ -321,6 +426,16 @@ function advisorDistance(row, ranks) {
 
 const ADVISOR_MATCH_WINDOW = 300
 
+function classifyAdvisorFit(candidateRank, cutoffRank) {
+  const candidate = Number(candidateRank)
+  const cutoff = Number(cutoffRank)
+  if (!(candidate > 0 && cutoff > 0)) return 'neutral'
+
+  const difference = cutoff - candidate
+  if (Math.abs(difference) <= ADVISOR_MATCH_WINDOW) return 'match'
+  return difference < 0 ? 'reach' : 'safe'
+}
+
 function advisorSelectionBand(candidateRank) {
   const rank = Number(candidateRank)
   if (!(rank > 0)) return null
@@ -376,9 +491,7 @@ function selectAdvisorRecommendations(
         candidateRank,
         delta,
         band: advisorSelectionBand(candidateRank),
-        fit: Math.abs(delta) <= ADVISOR_MATCH_WINDOW
-          ? 'match'
-          : delta < 0 ? 'reach' : 'safe',
+        fit: classifyAdvisorFit(candidateRank, cutoffRank),
       }
     })
     .filter(Boolean)
@@ -480,7 +593,7 @@ function selectAdvisorRecommendations(
     }
 
     return selected
-      .map(({ row, fit }) => ({ ...row, fit }))
+      .map(({ row, fit, candidateRank }) => ({ ...row, fit, candidateRank }))
       .sort((a, b) =>
         (a.rank || Infinity) - (b.rank || Infinity)
         || a.university.localeCompare(b.university, 'tr-TR'))
@@ -513,7 +626,7 @@ function selectAdvisorRecommendations(
   }
 
   return selected
-    .map(({ row, fit }) => ({ ...row, fit }))
+    .map(({ row, fit, candidateRank }) => ({ ...row, fit, candidateRank }))
     .sort((a, b) =>
       (a.rank || Infinity) - (b.rank || Infinity)
       || a.university.localeCompare(b.university, 'tr-TR'))
@@ -525,6 +638,8 @@ async function getAdvisorCandidates(
   message,
   intent,
   previousRecommendationCodes = [],
+  previousRecommendationUniversities = [],
+  previousRecommendationContexts = [],
   requestedCount = 5,
 ) {
   if (intent === 'chat' || intent === 'city') {
@@ -597,25 +712,11 @@ async function getAdvisorCandidates(
       distance: advisorDistance(row, ranks),
     }))
     .sort((a, b) => a.distance - b.distance || (a.rank || Infinity) - (b.rank || Infinity))
-  const excludedCodes = new Set(previousRecommendationCodes)
-  const continuationFloorByScore = {}
-  if (intent === 'safer' || intent === 'more') {
-    for (const row of rows) {
-      const candidateRank = Number(ranks[row.scoreType])
-      if (
-        excludedCodes.has(row.code)
-        && candidateRank > 0
-        && row.rank > candidateRank + ADVISOR_MATCH_WINDOW
-      ) {
-        continuationFloorByScore[row.scoreType] = Math.max(
-          continuationFloorByScore[row.scoreType] || 0,
-          row.rank,
-        )
-      }
-    }
-  }
+  const continuationFloorByScore = intent === 'safer' || intent === 'more'
+    ? advisorContinuationFloorByScore(rows, ranks, previousRecommendationContexts)
+    : {}
   const freshRows = intent === 'more' || intent === 'safer'
-    ? rows.filter((row) => !excludedCodes.has(row.code))
+    ? filterFreshAdvisorRows(rows, previousRecommendationCodes, previousRecommendationUniversities)
     : rows
   const recommendations = selectAdvisorRecommendations(
     freshRows,
@@ -676,6 +777,44 @@ function localizeAdvisorFitLabels(answer, language) {
     .replace(/\bsafe\b/gi, (label) => preserveCase(label, 'daha güvenli'))
 }
 
+function advisorFitLabel(fit, language) {
+  const labels = language === 'tr'
+    ? {
+        reach: 'İddialı',
+        match: 'Uygun',
+        safe: 'Daha güvenli',
+        neutral: 'Sıralama değerlendirilmedi',
+      }
+    : {
+        reach: 'Reach',
+        match: 'Match',
+        safe: 'Safer',
+        neutral: 'Ranking not evaluated',
+      }
+  return labels[fit] || labels.neutral
+}
+
+function enforceAdvisorFitLabels(answer, recommendations = [], language = 'tr') {
+  const localized = localizeAdvisorFitLabels(answer, language)
+  if (!localized || !recommendations.length) return localized
+
+  const knownLabel = /(?:İddialı|Iddialı|Uygun|Daha\s+güvenli|Sıralama\s+değerlendirilmedi|Reach|Match|Safer|Safe|Ranking\s+not\s+evaluated)/giu
+  const paragraphs = localized.split(/(\n\s*\n)/)
+
+  return paragraphs.map((paragraph) => {
+    if (!paragraph.trim()) return paragraph
+    const mentioned = recommendations.filter(({ university }) =>
+      university && paragraph.includes(university))
+    if (mentioned.length !== 1 || !knownLabel.test(paragraph)) {
+      knownLabel.lastIndex = 0
+      return paragraph
+    }
+
+    knownLabel.lastIndex = 0
+    return paragraph.replace(knownLabel, advisorFitLabel(mentioned[0].fit, language))
+  }).join('')
+}
+
 function sourceFromUrl(url, title = '') {
   try {
     const parsed = new URL(url)
@@ -723,16 +862,19 @@ async function openAIAdvisor(payload) {
       'You are Pusula University Advisor for YKS candidates in Türkiye.',
       'Have a genuine conversation: answer the latest message directly, use conversation history, and never repeat a generic shortlist when the user asks a follow-up.',
       'Act on the requested interaction exactly rather than merely restating the candidate profile.',
+      'The candidate profile already includes any ranking stated in the latest message. Treat that latest ranking as authoritative for this reply; never keep using, mention, or apologize for an older ranking.',
       'For a chat intent without a recommendation request, answer conversationally and do not introduce universities or a shortlist.',
       'For a city intent, do not name or repeat the recommendation shortlist. Give a concise city-focused answer, preferably a practical pros/cons comparison covering living costs, housing, transport, campus life, internship/industry access, and how much the city filter narrows program choices.',
       'For a compare intent, compare the supplied universities directly and concisely. Do not repeat each full recommendation description or tell the user that the same cards are being shown again.',
       'For a more intent, discuss only the newly supplied programs. Never repeat programs from the previous shortlist, and do not claim the new list is the old list. Respect the requested count up to eight; if fewer fresh programs are supplied, state that briefly and discuss only those.',
+      'When a new ranking is supplied after an earlier shortlist, immediately recommend fresh universities for the new ranking from the supplied shortlist. Do not tell the candidate that the list was prepared for the old ranking.',
       'For recommendation-bearing intents, use only the supplied official YÖK Atlas shortlist when naming a university, program, city, score, cutoff ranking, or fit band. For non-recommendation questions, answer the named topic directly from the conversation and verified sources without creating a new shortlist.',
       'The application has already queried YÖK Atlas to build the supplied shortlist. Never ask the user to upload, paste, or provide a larger official list when shortlist items are present.',
       'The structured shortlist is authoritative for placement figures. Never replace, estimate, or contradict those numbers with web results.',
       'When a shortlist is supplied, it is already the exact card list and display order. Preserve it without adding, removing, substituting, or reordering universities. If it is empty, do not invent or repeat a previous shortlist.',
-      'Fit classes are calculated from the candidate ranking for the matching score type using a strict 300-rank window: match is at most 300 ranks in either direction, reach is more than 300 ranks lower/more selective, and safe is more than 300 ranks higher/less selective. Preserve each supplied classification; never infer or recalculate it.',
+      'Fit classes are calculated from the candidate ranking for the matching score type using a strict 300-rank window: match is at most 300 ranks in either direction, reach is more than 300 ranks lower/more selective, and safe is more than 300 ranks higher/less selective. A candidate rank of 2,000 versus a cutoff rank of 113 is always reach, never match. Preserve each supplied classification; never infer or recalculate it.',
       'Localize every displayed fit label to the reply language. In Turkish, always write İddialı for reach, Uygun for match, and Daha güvenli for safe/safer. Never show the English words reach, match, safe, or safer anywhere in a Turkish reply, including headings, tables, parentheses, and explanations. In English, use Reach, Match, and Safer.',
+      'If a shortlist item has neutral fit because no ranking exists for its score type, write Sıralama değerlendirilmedi in Turkish or Ranking not evaluated in English. Never describe a neutral item as match/Uygun.',
       'For the default five-item profile recommendation, the selector targets one reach, three matches, and one safer option when the official data contains them; missing match slots are filled with the closest safer options. For other requested counts, preserve the supplied composition exactly.',
       'For safer intent, do not repeat the previous general shortlist. Discuss only the newly supplied shortlist.',
       'When giving recommendations, write every supplied shortlist item once in the answer text, in the exact supplied order and count. For each item include the university, program, city, cutoff ranking, and localized fit label. The allowed requested count is one through eight. Do not claim that a fit band or fresh program is absent when one is supplied.',
@@ -814,6 +956,92 @@ function consumeAdvisorQuota(ip) {
   record.count += 1
   advisorGlobalRateLimit.count += 1
   return { allowed: true }
+}
+
+function normalizeUniversityReviewName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, 180)
+}
+
+function universityReviewKey(university) {
+  const normalized = normalizeText(normalizeUniversityReviewName(university))
+  return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 32)
+}
+
+function normalizeReviewRatings(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const ratings = Object.fromEntries(REVIEW_FIELDS.map((field) => [field, Number(value[field])]))
+  return REVIEW_FIELDS.every((field) =>
+    Number.isInteger(ratings[field]) && ratings[field] >= 1 && ratings[field] <= 5)
+    ? ratings
+    : null
+}
+
+function consumeReviewQuota(ip) {
+  const now = Date.now()
+  const record = reviewRateLimit.get(ip)
+  if (!record || now - record.startedAt > REVIEW_WINDOW_MS) {
+    reviewRateLimit.set(ip, { startedAt: now, count: 1 })
+    return { allowed: true }
+  }
+  if (record.count >= REVIEW_IP_LIMIT) {
+    return {
+      allowed: false,
+      retryAfter: Math.max(1, Math.ceil((REVIEW_WINDOW_MS - (now - record.startedAt)) / 1000)),
+    }
+  }
+  record.count += 1
+  return { allowed: true }
+}
+
+function reviewSummaryData(summary = {}, reviews = []) {
+  const count = Math.max(0, Number(summary.count) || 0)
+  const averages = Object.fromEntries(REVIEW_FIELDS.map((field) => [
+    field,
+    count ? Number(((Number(summary[`${field}Total`]) || 0) / count).toFixed(2)) : 0,
+  ]))
+  const overall = count
+    ? Number((REVIEW_FIELDS.reduce((sum, field) => sum + averages[field], 0) / REVIEW_FIELDS.length).toFixed(2))
+    : 0
+
+  return {
+    university: normalizeUniversityReviewName(summary.universityName),
+    count,
+    overall,
+    averages,
+    reviews: reviews.map((review) => ({
+      id: review.id,
+      comment: String(review.comment || '').slice(0, 500),
+    })),
+  }
+}
+
+async function loadUniversityReviews(university) {
+  const name = normalizeUniversityReviewName(university)
+  const key = universityReviewKey(name)
+  if (USE_LOCAL_REVIEW_STORE) {
+    return reviewSummaryData(
+      localReviewStore.get(key) || { universityName: name },
+      [],
+    )
+  }
+
+  const summaryRef = getFirestore().collection('universityReviewSummaries').doc(key)
+  const [summarySnapshot, reviewsSnapshot] = await Promise.all([
+    summaryRef.get(),
+    summaryRef.collection('reviews').orderBy('createdAt', 'desc').limit(30).get(),
+  ])
+  const approvedReviews = reviewsSnapshot.docs
+    .map((document) => ({ id: document.id, ...document.data() }))
+    .filter((review) => review.status === 'approved' && review.comment)
+    .slice(0, 6)
+
+  return reviewSummaryData(
+    summarySnapshot.exists ? summarySnapshot.data() : { universityName: name },
+    approvedReviews,
+  )
 }
 
 function logUpstreamError(area, error) {
@@ -911,6 +1139,122 @@ app.post('/api/nets', async (req, res) => {
   }
 })
 
+app.get('/api/reviews', async (req, res) => {
+  res.set('Cache-Control', 'no-store, max-age=0')
+  const university = normalizeUniversityReviewName(req.query.university)
+  if (university.length < 3) {
+    return res.status(400).json({ message: 'A valid university name is required.' })
+  }
+
+  try {
+    return res.json(await loadUniversityReviews(university))
+  } catch (error) {
+    logUpstreamError('University reviews error', error)
+    return res.status(503).json({ message: 'Student reviews are temporarily unavailable.' })
+  }
+})
+
+app.post('/api/reviews', async (req, res) => {
+  res.set('Cache-Control', 'no-store')
+  if (!isTrustedAdvisorOrigin(req)) {
+    return res.status(403).json({ message: 'Reviews are accepted only from the Pusula website.' })
+  }
+
+  const quota = consumeReviewQuota(req.ip || req.socket.remoteAddress || 'unknown')
+  if (!quota.allowed) {
+    res.set('Retry-After', String(quota.retryAfter))
+    return res.status(429).json({ message: 'Too many reviews were submitted. Please try again later.' })
+  }
+
+  const university = normalizeUniversityReviewName(req.body?.university)
+  const ratings = normalizeReviewRatings(req.body?.ratings)
+  const comment = String(req.body?.comment || '').trim().replace(/\s+/g, ' ').slice(0, 500)
+  const clientId = String(req.body?.clientId || '').trim()
+  const programCode = String(req.body?.programCode || '').replace(/\D/g, '').slice(0, 20)
+  if (university.length < 3 || !ratings || !/^[a-f0-9-]{16,80}$/i.test(clientId)) {
+    return res.status(400).json({ message: 'University, four ratings, and a valid anonymous client ID are required.' })
+  }
+
+  const key = universityReviewKey(university)
+  const reviewerKey = crypto
+    .createHash('sha256')
+    .update(`${key}:${clientId}`)
+    .digest('hex')
+    .slice(0, 40)
+
+  if (USE_LOCAL_REVIEW_STORE) {
+    const current = localReviewStore.get(key) || {
+      universityName: university,
+      count: 0,
+      dormsTotal: 0,
+      professorsTotal: 0,
+      campusTotal: 0,
+      socialLifeTotal: 0,
+      reviewerKeys: new Set(),
+    }
+    if (current.reviewerKeys.has(reviewerKey)) {
+      return res.status(409).json({
+        message: 'A review for this university was already submitted from this browser.',
+      })
+    }
+    current.reviewerKeys.add(reviewerKey)
+    current.count += 1
+    REVIEW_FIELDS.forEach((field) => {
+      current[`${field}Total`] += ratings[field]
+    })
+    localReviewStore.set(key, current)
+    return res.status(201).json({
+      ok: true,
+      moderationRequired: Boolean(comment),
+      summary: reviewSummaryData(current, []),
+    })
+  }
+
+  const summaryRef = getFirestore().collection('universityReviewSummaries').doc(key)
+  const reviewRef = summaryRef.collection('reviews').doc(reviewerKey)
+
+  try {
+    await getFirestore().runTransaction(async (transaction) => {
+      const existing = await transaction.get(reviewRef)
+      if (existing.exists) {
+        const duplicate = new Error('A review for this university was already submitted from this browser.')
+        duplicate.code = 'review/already-exists'
+        throw duplicate
+      }
+
+      transaction.set(reviewRef, {
+        universityName: university,
+        programCode: programCode || null,
+        ratings,
+        comment: comment || null,
+        status: comment ? 'pending' : 'ratings-only',
+        createdAt: FieldValue.serverTimestamp(),
+      })
+      transaction.set(summaryRef, {
+        universityName: university,
+        count: FieldValue.increment(1),
+        dormsTotal: FieldValue.increment(ratings.dorms),
+        professorsTotal: FieldValue.increment(ratings.professors),
+        campusTotal: FieldValue.increment(ratings.campus),
+        socialLifeTotal: FieldValue.increment(ratings.socialLife),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true })
+    })
+
+    return res.status(201).json({
+      ok: true,
+      moderationRequired: Boolean(comment),
+      summary: await loadUniversityReviews(university),
+    })
+  } catch (error) {
+    if (error?.code === 'review/already-exists') {
+      return res.status(409).json({ message: error.message })
+    }
+    logUpstreamError('University review submission error', error)
+    return res.status(503).json({ message: 'Your review could not be saved right now.' })
+  }
+})
+
 app.post('/api/advisor', async (req, res) => {
   res.set('Cache-Control', 'no-store')
 
@@ -929,8 +1273,6 @@ app.post('/api/advisor', async (req, res) => {
   const requestedIntent = ['chat', 'recommend', 'safer', 'compare', 'city', 'more'].includes(req.body?.intent)
     ? req.body.intent
     : 'chat'
-  const intent = inferAdvisorIntent(message, requestedIntent)
-  const requestedCount = requestedAdvisorRecommendationCount(message, intent)
   const rawProfile = req.body?.profile && typeof req.body.profile === 'object' && !Array.isArray(req.body.profile)
     ? req.body.profile
     : {}
@@ -970,6 +1312,42 @@ app.post('/api/advisor', async (req, res) => {
     .map((code) => String(code))
     .filter((code) => /^\d+$/.test(code))
     .slice(0, 64)
+  const previousRecommendationUniversities = (Array.isArray(req.body?.previousRecommendationUniversities)
+    ? req.body.previousRecommendationUniversities
+    : [])
+    .map((university) => String(university || '').trim().slice(0, 180))
+    .filter(Boolean)
+    .slice(0, 64)
+  const previousRecommendationScoreTypes = (Array.isArray(req.body?.previousRecommendationScoreTypes)
+    ? req.body.previousRecommendationScoreTypes
+    : [])
+    .map(scoreTypeKey)
+    .filter((type) => ['TYT', 'SAY', 'EA', 'SÖZ', 'DİL'].includes(type))
+    .slice(0, 64)
+  const previousRecommendationContexts = (Array.isArray(req.body?.previousRecommendationContexts)
+    ? req.body.previousRecommendationContexts
+    : [])
+    .slice(-64)
+    .map((context) => ({
+      code: String(context?.code || ''),
+      scoreType: scoreTypeKey(context?.scoreType),
+      candidateRank: Number(context?.candidateRank) > 0
+        ? Math.round(Number(context.candidateRank))
+        : null,
+    }))
+    .filter((context) =>
+      /^\d+$/.test(context.code)
+      && ['TYT', 'SAY', 'EA', 'SÖZ', 'DİL'].includes(context.scoreType)
+      && context.candidateRank)
+  const rankOverride = inferAdvisorRankOverride(message, profile, previousRecommendationScoreTypes)
+  if (rankOverride) {
+    profile.ranks = {
+      ...profile.ranks,
+      [rankOverride.scoreType]: rankOverride.rank,
+    }
+  }
+  const intent = resolveAdvisorIntent(message, requestedIntent, previousRecommendationCodes)
+  const requestedCount = requestedAdvisorRecommendationCount(message, intent)
 
   if (!message && !profile.interests) {
     return res.status(400).json({ message: 'Tell the advisor about your interests or ask a question.' })
@@ -1000,13 +1378,15 @@ app.post('/api/advisor', async (req, res) => {
       message,
       intent,
       previousRecommendationCodes,
+      previousRecommendationUniversities,
+      previousRecommendationContexts,
       requestedCount,
     )
     const payload = { language, message, history, intent, requestedCount, profile, ...grounded }
     const result = await openAIAdvisor(payload)
     if (!result.answer) throw new Error('OpenAI returned an empty response.')
     res.json({
-      answer: localizeAdvisorFitLabels(result.answer, language),
+      answer: enforceAdvisorFitLabels(result.answer, grounded.recommendations, language),
       sources: result.sources,
       recommendations: shouldReturnAdvisorRecommendationMetadata(intent)
         ? grounded.recommendations
@@ -1041,11 +1421,20 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
 export {
   app,
+  advisorContinuationFloorByScore,
   advisorSelectionBand,
   advisorSuggestionStep,
+  classifyAdvisorFit,
+  enforceAdvisorFitLabels,
+  filterFreshAdvisorRows,
+  inferAdvisorRankOverride,
   inferAdvisorIntent,
   isGreetingOnly,
+  normalizeReviewRatings,
   requestedAdvisorRecommendationCount,
+  resolveAdvisorIntent,
+  reviewSummaryData,
   selectAdvisorRecommendations,
   shouldReturnAdvisorRecommendationMetadata,
+  universityReviewKey,
 }

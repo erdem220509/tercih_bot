@@ -11,8 +11,21 @@ const ipv4DnsPreload = path.join(scriptDirectory, 'firebase-ipv4-dns.cjs')
 
 let needsIpv4DnsWorkaround = false
 try {
-  const addresses = await lookup('serviceusage.googleapis.com', { all: true })
-  needsIpv4DnsWorkaround = !addresses.some(({ family }) => family === 4)
+  const addresses = await lookup('cloudfunctions.googleapis.com', { all: true })
+  const hasIpv4 = addresses.some(({ family }) => family === 4)
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 6_000)
+  try {
+    await fetch('https://cloudfunctions.googleapis.com/', {
+      method: 'HEAD',
+      signal: controller.signal,
+    })
+    needsIpv4DnsWorkaround = !hasIpv4
+  } catch {
+    needsIpv4DnsWorkaround = true
+  } finally {
+    clearTimeout(timeout)
+  }
 } catch {
   needsIpv4DnsWorkaround = true
 }

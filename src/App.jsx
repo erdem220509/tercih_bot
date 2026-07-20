@@ -7,19 +7,28 @@ import {
   ChevronDown,
   ExternalLink,
   GraduationCap,
+  Heart,
   Info,
   Languages,
   LoaderCircle,
   MapPin,
   Search,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   TrendingDown,
   X,
 } from 'lucide-react'
 import AdvisorChat from './AdvisorChat'
+import StudentReviews from './StudentReviews'
 import { getCities, getNets, getPrograms, searchPrograms } from './api'
 import { findLanguageRequirement } from './data/languageRequirements'
+import {
+  FAVORITES_STORAGE_KEY,
+  favoriteProgramKey,
+  favoriteProgramLabel,
+  loadFavoritePrograms,
+} from './favorites'
 
 const YEARS = [2022, 2023, 2024, 2025]
 const SCORE_TYPES = ['TYT', 'SAY', 'EA', 'SÖZ', 'DİL']
@@ -28,6 +37,7 @@ const numberFormat = new Intl.NumberFormat('tr-TR')
 const scoreFormat = new Intl.NumberFormat('en-US', { minimumFractionDigits: 3, maximumFractionDigits: 5, useGrouping: false })
 const COPY = {
   en: {
+    jumpToPrograms: 'Choose a program',
     home: 'Pusula home', officialData: 'Official YÖK Atlas data',
     workspace: '2026 preference workspace', headline1: 'Find the program.', headline2: 'Read the trend.',
     intro: 'Compare every listed university using four years of official placement data.',
@@ -68,8 +78,20 @@ const COPY = {
     netsNote: "YÖK Atlas publishes net values, not the candidate's separate correct and incorrect answer counts. OBP:",
     nonEnglish: 'This program is listed with this teaching language:', languageMissing: "This program uses English, but a current verified TOEFL/IELTS rule is not in the curated set yet. Check the university's School of Foreign Languages before registration.",
     officialRequirement: 'Official requirement', pts: 'pts', osymCode: 'ÖSYM code',
+    saveProgram: 'Save this program option', removeFavorite: 'Remove this program option from saved',
+    savedUniversities: 'Saved', savedOnly: 'Show saved program options in these results',
+    savedEmpty: 'None of your saved program options appear in these results.',
+    savedEmptyHelp: 'Turn off the saved filter or search for another program.',
+    studentReviews: 'Student reviews',
+    trustItems: [
+      'Uses official YÖK Atlas data',
+      'Placement data refreshes automatically',
+      'AI placement recommendations use official statistics',
+    ],
+    trustTitle: 'Verified data',
   },
   tr: {
+    jumpToPrograms: 'Bölüm seçmeye başla',
     home: 'Pusula ana sayfa', officialData: 'Resmî YÖK Atlas verileri',
     workspace: '2026 tercih rehberi', headline1: 'İstediğin bölümü bul.', headline2: 'Geçmiş yıllarla karşılaştır.',
     intro: 'Üniversite programlarını son dört yılın taban başarı sıraları ve puanlarıyla karşılaştır.',
@@ -110,6 +132,17 @@ const COPY = {
     netsNote: 'YÖK Atlas doğru ve yanlış sayılarını ayrı ayrı değil, netleri yayımlar. OBP:',
     nonEnglish: 'Programın öğretim dili:', languageMissing: 'Program İngilizce eğitim veriyor ancak güncel TOEFL/IELTS koşulu doğrulanmış listemizde yer almıyor. Kayıttan önce üniversitenin yabancı diller biriminin güncel duyurusunu kontrol et.',
     officialRequirement: 'Resmi koşulları gör', pts: 'puan', osymCode: 'ÖSYM program kodu',
+    saveProgram: 'Bu program seçeneğini kaydet', removeFavorite: 'Bu program seçeneğini kaydedilenlerden çıkar',
+    savedUniversities: 'Kaydedilenler', savedOnly: 'Bu sonuçlardaki kayıtlı program seçeneklerini göster',
+    savedEmpty: 'Kaydettiğin program seçenekleri bu sonuçlarda yer almıyor.',
+    savedEmptyHelp: 'Kaydedilenler filtresini kapat veya başka bir bölüm ara.',
+    studentReviews: 'Öğrenci değerlendirmeleri',
+    trustItems: [
+      'Resmî YÖK Atlas verilerini kullanır',
+      'Yerleştirme verileri otomatik güncellenir',
+      'AI yerleştirme önerileri resmî istatistiklere dayanır',
+    ],
+    trustTitle: 'Doğrulanmış veri',
   },
 }
 
@@ -462,11 +495,22 @@ function LanguagePanel({ row, c, uiLanguage }) {
   )
 }
 
-function ResultRow({ row, userRanks, expanded, onToggle, c, uiLanguage }) {
+function ResultRow({ row, userRanks, expanded, onToggle, favorite, onFavorite, c, uiLanguage }) {
   const history = yearData(row)
   const status = matchStatus(userRanks[scoreTypeKey(row.puanTuru)], row.basariSirasi, c)
+  const favoriteLabel = favoriteProgramLabel(row)
   return (
     <article className={`result-row ${expanded ? 'expanded' : ''}`}>
+      <button
+        className={`favorite-button ${favorite ? 'active' : ''}`}
+        type="button"
+        aria-label={favorite ? `${c.removeFavorite}: ${favoriteLabel}` : `${c.saveProgram}: ${favoriteLabel}`}
+        aria-pressed={favorite}
+        title={favorite ? c.removeFavorite : c.saveProgram}
+        onClick={onFavorite}
+      >
+        <Heart size={18} fill={favorite ? 'currentColor' : 'none'} />
+      </button>
       <button className="result-main" type="button" onClick={onToggle} aria-expanded={expanded}>
         <div className="rank-cell">
           <span>{c.rank2025}</span>
@@ -519,6 +563,13 @@ function ResultRow({ row, userRanks, expanded, onToggle, c, uiLanguage }) {
             <div className="section-kicker"><Languages size={16} /> {c.englishExemption}</div>
             <LanguagePanel row={row} c={c} uiLanguage={uiLanguage} />
           </section>
+          <section>
+            <StudentReviews
+              university={row.universiteAdi}
+              programCode={row.kilavuzKodu}
+              uiLanguage={uiLanguage}
+            />
+          </section>
           <div className="detail-footer">
             <span>{c.osymCode} {row.kilavuzKodu} · {row.kontenjan ?? '—'} {c.generalQuota}</span>
             <a href={`https://yokatlas.yok.gov.tr/lisans.php?y=${row.kilavuzKodu}`} target="_blank" rel="noreferrer">{c.openAtlas} <ExternalLink size={14} /></a>
@@ -556,8 +607,15 @@ export default function App() {
   const [sort, setSort] = useState('RANK_ASC')
   const [expanded, setExpanded] = useState(null)
   const [advisorOpenSignal, setAdvisorOpenSignal] = useState(0)
+  const [favoritePrograms, setFavoritePrograms] = useState(loadFavoritePrograms)
+  const [showSavedOnly, setShowSavedOnly] = useState(false)
   const searchRequestRef = useRef(0)
+  const preferenceBarRef = useRef(null)
   const c = COPY[uiLanguage] || COPY.en
+  const favoriteKeys = useMemo(
+    () => new Set(favoritePrograms.map((item) => item.key)),
+    [favoritePrograms],
+  )
 
   const runSearch = async (programList, type, cityList) => {
     const requestId = ++searchRequestRef.current
@@ -628,6 +686,10 @@ export default function App() {
     localStorage.setItem('pusula-ui-language-v2', uiLanguage)
   }, [uiLanguage])
 
+  useEffect(() => {
+    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favoritePrograms))
+  }, [favoritePrograms])
+
   const filteredResults = useMemo(() => {
     const needle = resultQuery.toLocaleLowerCase('tr-TR').trim()
     const filtered = results.filter((row) => {
@@ -635,7 +697,8 @@ export default function App() {
         || (appliedTeachingLanguage === 'EN' && String(row.ogrenimDiliAdi).toLocaleLowerCase('tr-TR').includes('ingiliz'))
         || (appliedTeachingLanguage === 'TR' && !String(row.ogrenimDiliAdi).toLocaleLowerCase('tr-TR').includes('ingiliz'))
       const textMatch = !needle || `${row.universiteAdi} ${row.fymkAdi || ''}`.toLocaleLowerCase('tr-TR').includes(needle)
-      return languageMatch && textMatch
+      const favoriteMatch = !showSavedOnly || favoriteKeys.has(favoriteProgramKey(row))
+      return languageMatch && textMatch && favoriteMatch
     })
     return filtered.sort((a, b) => {
       if (sort === 'SCORE_DESC') {
@@ -649,7 +712,7 @@ export default function App() {
       return rankDifference
         || (Number(b.minPuan) || -Infinity) - (Number(a.minPuan) || -Infinity)
     })
-  }, [results, appliedTeachingLanguage, resultQuery, sort])
+  }, [results, appliedTeachingLanguage, resultQuery, sort, showSavedOnly, favoriteKeys])
 
   const toggleProgram = (program) => {
     const key = programKey(program)
@@ -674,12 +737,40 @@ export default function App() {
     setSelectedCities([])
   }
 
+  const toggleFavoriteProgram = (row) => {
+    const key = favoriteProgramKey(row)
+    setFavoritePrograms((current) => current.some((item) => item.key === key)
+      ? current.filter((item) => item.key !== key)
+      : [...current, {
+        key,
+        code: key,
+        university: row.universiteAdi,
+        program: row.birimAdi,
+        scholarship: row.bursOraniAdi || null,
+        city: row.ilAdi,
+        type: row.universiteTuru,
+        savedAt: new Date().toISOString(),
+      }])
+  }
+
   const explore = () => {
     setAppliedPrograms(selectedPrograms)
     setAppliedTeachingLanguage(teachingLanguage)
     setAppliedRanks({ ...userRanks })
     setHasSearched(true)
     runSearch(selectedPrograms, universityType, selectedCities)
+  }
+
+  const scrollToProgramSelection = () => {
+    const target = preferenceBarRef.current
+    if (!target) return
+
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    target.focus({ preventScroll: true })
+    target.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'start',
+    })
   }
 
   const toggleRankSort = () => {
@@ -707,10 +798,14 @@ export default function App() {
 
       <main id="top">
         <section className="workspace-intro">
-          <div>
+          <div className="workspace-intro-copy">
             <p className="eyebrow"><Sparkles size={14} /> {c.workspace}</p>
             <h1>{c.headline1}<br /><em>{c.headline2}</em></h1>
             <p className="intro-copy">{c.intro}</p>
+            <button className="hero-primary-action" type="button" onClick={scrollToProgramSelection}>
+              <span>{c.jumpToPrograms}</span>
+              <ArrowDown size={18} aria-hidden="true" />
+            </button>
           </div>
           <aside className="hero-guide">
             <div className="hero-guide-meta">
@@ -731,7 +826,12 @@ export default function App() {
           </aside>
         </section>
 
-        <section className="preference-bar" aria-label={c.filtersLabel}>
+        <section
+          className="preference-bar"
+          ref={preferenceBarRef}
+          tabIndex="-1"
+          aria-label={c.filtersLabel}
+        >
           <ProgramPicker programs={programs} selected={selectedPrograms} onToggle={toggleProgram} loading={catalogLoading} c={c} />
           <RankPicker
             values={userRanks}
@@ -744,6 +844,13 @@ export default function App() {
             {searchLoading ? <LoaderCircle className="spin" size={18} /> : <Search size={18} />} {c.explore}
           </button>
         </section>
+
+        <aside className="trust-rail" aria-label={uiLanguage === 'tr' ? 'Veri güveni' : 'Data trust'}>
+          <strong className="trust-rail-title"><ShieldCheck size={20} /> {c.trustTitle}</strong>
+          {c.trustItems.map((item) => (
+            <span key={item}><Check size={15} /> {item}</span>
+          ))}
+        </aside>
 
         <section className="results-workspace">
           <aside className="filters-panel">
@@ -774,6 +881,17 @@ export default function App() {
                 <span>{searchLoading ? c.updating : `${formatRank(filteredResults.length)} ${c.shown}${total > results.length ? ` · ${formatRank(total)} ${c.total}` : ''}`}</span>
               </div>
               <div className="result-tools">
+                <button
+                  className={`favorites-toggle ${showSavedOnly ? 'active' : ''}`}
+                  type="button"
+                  aria-pressed={showSavedOnly}
+                  title={c.savedOnly}
+                  onClick={() => setShowSavedOnly((value) => !value)}
+                >
+                  <Heart size={15} fill={showSavedOnly ? 'currentColor' : 'none'} />
+                  <span>{c.savedUniversities}</span>
+                  <b>{favoritePrograms.length}</b>
+                </button>
                 <label className="within-search"><Search size={15} /><input value={resultQuery} onChange={(event) => setResultQuery(event.target.value)} placeholder={c.universityOrCity} /></label>
                 <div className="sort-switch" aria-label={`${c.rank} / ${c.score}`}>
                   <button
@@ -794,14 +912,24 @@ export default function App() {
             {searchLoading ? <LoadingRows /> : filteredResults.length ? (
               <div className="results-list">
                 {filteredResults.map((row) => (
-                  <ResultRow key={row.kilavuzKodu} row={row} userRanks={appliedRanks} expanded={expanded === row.kilavuzKodu} onToggle={() => setExpanded(expanded === row.kilavuzKodu ? null : row.kilavuzKodu)} c={c} uiLanguage={uiLanguage} />
+                  <ResultRow
+                    key={row.kilavuzKodu}
+                    row={row}
+                    userRanks={appliedRanks}
+                    expanded={expanded === row.kilavuzKodu}
+                    onToggle={() => setExpanded(expanded === row.kilavuzKodu ? null : row.kilavuzKodu)}
+                    favorite={favoriteKeys.has(favoriteProgramKey(row))}
+                    onFavorite={() => toggleFavoriteProgram(row)}
+                    c={c}
+                    uiLanguage={uiLanguage}
+                  />
                 ))}
               </div>
             ) : !error && (
               <div className="empty-state">
                 <Search size={24} />
-                <h3>{hasSearched ? c.noResults : c.startTitle}</h3>
-                <p>{hasSearched ? c.noResultsHelp : c.startHelp}</p>
+                <h3>{showSavedOnly ? c.savedEmpty : hasSearched ? c.noResults : c.startTitle}</h3>
+                <p>{showSavedOnly ? c.savedEmptyHelp : hasSearched ? c.noResultsHelp : c.startHelp}</p>
               </div>
             )}
 

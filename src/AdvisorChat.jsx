@@ -52,9 +52,10 @@ const ADVISOR_COPY = {
     needProfile: 'En azından ilgi alanlarını yaz veya sayfadan bir bölüm seç.',
     error: 'Şu anda yanıt veremedim. Biraz sonra yeniden deneyebilirsin.',
     thinking: 'Pusula düşünüyor ve güncel kaynakları kontrol ediyor...',
-    quickSafer: 'Daha güvenli seçeneklerim neler?',
-    quickCompare: 'Bu bölümleri karşılaştır',
-    quickCity: 'Şehir tercihim neyi değiştirir?',
+    popularQuestions: 'Popüler sorular',
+    quickCompare: 'İTÜ ve ODTÜ’yü karşılaştır',
+    quickAi: 'Yapay zekâ için en iyi üniversiteler hangileri?',
+    quickRank: '15 bin sıralamayla hangi üniversitelere girebilirim?',
     official: '2025 taban verisi',
     safe: 'Daha güvenli',
     match: 'Uygun',
@@ -98,9 +99,10 @@ const ADVISOR_COPY = {
     needProfile: 'Add at least one interest or select a program on the page.',
     error: 'I could not answer right now. Please try again in a moment.',
     thinking: 'Pusula is thinking and checking current sources...',
-    quickSafer: 'What are my safer options?',
-    quickCompare: 'Compare these programs',
-    quickCity: 'How does my city choice matter?',
+    popularQuestions: 'Popular questions',
+    quickCompare: 'Compare ITU and METU',
+    quickAi: 'What are the best universities for AI?',
+    quickRank: 'Which universities can I enter with a 15k ranking?',
     official: '2025 cutoff data',
     safe: 'Safer',
     match: 'Match',
@@ -166,7 +168,7 @@ function MarkdownMessage({ content }) {
 export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0 }) {
   const c = ADVISOR_COPY[uiLanguage] || ADVISOR_COPY.tr
   const [open, setOpen] = useState(false)
-  const [profileOpen, setProfileOpen] = useState(true)
+  const [profileOpen, setProfileOpen] = useState(false)
   const [profile, setProfile] = useState(() => createProfile(currentFilters))
   const [messages, setMessages] = useState([])
   const [message, setMessage] = useState('')
@@ -234,7 +236,7 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
     setMessage('')
     setProfile(createEmptyProfile())
     setLoading(false)
-    setProfileOpen(true)
+    setProfileOpen(false)
     setProfileError('')
     setFiltersSynced(false)
     if (syncFeedbackTimerRef.current) {
@@ -265,6 +267,23 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
       messages.flatMap((item) =>
         (item.recommendations || []).map((recommendation) => String(recommendation.code))),
     )].slice(-64)
+    const previousRecommendationUniversities = [...new Set(
+      messages.flatMap((item) =>
+        (item.recommendations || []).map((recommendation) => recommendation.university).filter(Boolean)),
+    )].slice(-64)
+    const previousRecommendationScoreTypes = [...new Set(
+      messages.flatMap((item) =>
+        (item.recommendations || []).map((recommendation) => recommendation.scoreType).filter(Boolean)),
+    )].slice(-5)
+    const previousRecommendationContexts = messages.flatMap((item) =>
+      (item.recommendations || []).map((recommendation) => ({
+        code: String(recommendation.code),
+        scoreType: recommendation.scoreType,
+        candidateRank: recommendation.candidateRank,
+      })),
+    ).filter((context) =>
+      context.code && context.scoreType && Number(context.candidateRank) > 0)
+      .slice(-64)
     setMessages((current) => [...current, userMessage])
 
     try {
@@ -274,6 +293,9 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
         language: uiLanguage,
         history,
         previousRecommendationCodes,
+        previousRecommendationUniversities,
+        previousRecommendationScoreTypes,
+        previousRecommendationContexts,
         profile: {
           ...profile,
           cityCodes: profile.cityCodes || [],
@@ -318,15 +340,15 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
   }
 
   const quickPrompts = [
-    { label: c.quickSafer, intent: 'safer' },
     { label: c.quickCompare, intent: 'compare' },
-    { label: c.quickCity, intent: 'city' },
+    { label: c.quickAi, intent: 'recommend' },
+    { label: c.quickRank, intent: 'recommend' },
   ]
 
   return (
     <div className={`advisor-shell ${open ? 'is-open' : ''}`}>
       {!open && (
-        <button className="advisor-launcher" type="button" onClick={() => setOpen(true)}>
+        <button className="advisor-launcher" type="button" aria-label={c.launcher} onClick={() => setOpen(true)}>
           <span><Sparkles size={16} /></span>
           <strong>{c.launcher}</strong>
           <MessageCircle size={18} />
@@ -494,10 +516,11 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
           </div>
 
           <div className="advisor-quick-prompts">
+            <span>{c.popularQuestions}</span>
             {quickPrompts.map((prompt) => (
               <button
                 type="button"
-                key={prompt.intent}
+                key={prompt.label}
                 onClick={() => sendMessage(prompt.label, prompt.intent)}
                 disabled={loading}
               >

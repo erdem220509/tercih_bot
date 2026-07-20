@@ -1,11 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  advisorContinuationFloorByScore,
   advisorSelectionBand,
   advisorSuggestionStep,
+  classifyAdvisorFit,
+  enforceAdvisorFitLabels,
+  filterFreshAdvisorRows,
+  inferAdvisorRankOverride,
   inferAdvisorIntent,
   isGreetingOnly,
   requestedAdvisorRecommendationCount,
+  resolveAdvisorIntent,
   selectAdvisorRecommendations,
   shouldReturnAdvisorRecommendationMetadata,
 } from '../server.mjs'
@@ -38,6 +44,38 @@ test('selection bands scale with the candidate ranking', () => {
 
   assert.equal(advisorSuggestionStep(2000), 300)
   assert.equal(advisorSuggestionStep(30000), 2400)
+})
+
+test('fit classification treats elite cutoffs as reach for a 2000-ranked candidate', () => {
+  assert.equal(classifyAdvisorFit(2000, 113), 'reach')
+  assert.equal(classifyAdvisorFit(2000, 299), 'reach')
+  assert.equal(classifyAdvisorFit(2000, 337), 'reach')
+  assert.equal(classifyAdvisorFit(2000, 788), 'reach')
+  assert.equal(classifyAdvisorFit(2000, 898), 'reach')
+  assert.equal(classifyAdvisorFit(2000, 1700), 'match')
+  assert.equal(classifyAdvisorFit(2000, 2300), 'match')
+  assert.equal(classifyAdvisorFit(2000, 2301), 'safe')
+})
+
+test('visible recommendation labels are corrected from structured fit metadata', () => {
+  const answer = [
+    '**KOÇ ÜNİVERSİTESİ (İSTANBUL)** — Bilgisayar Mühendisliği',
+    '**2025 taban sıralaması:** 113 — **Uygun**',
+    '',
+    '**BİLKENT ÜNİVERSİTESİ (ANKARA)** — Bilgisayar Mühendisliği',
+    '**2025 taban sıralaması:** 2.050 — **Uygun**',
+    '',
+    '“Uygun” etiketi bir karşılaştırma bandıdır.',
+  ].join('\n')
+  const recommendations = [
+    { university: 'KOÇ ÜNİVERSİTESİ', fit: 'reach' },
+    { university: 'BİLKENT ÜNİVERSİTESİ', fit: 'match' },
+  ]
+
+  const corrected = enforceAdvisorFitLabels(answer, recommendations, 'tr')
+  assert.match(corrected, /113 — \*\*İddialı\*\*/)
+  assert.match(corrected, /2\.050 — \*\*Uygun\*\*/)
+  assert.match(corrected, /“Uygun” etiketi/)
 })
 
 test('general recommendations contain at most one nearby reach option', () => {
@@ -130,6 +168,26 @@ test('continued safer recommendations start after the previous safer cutoff', ()
   assert.deepEqual(selected.map(({ rank }) => rank), [2050, 3500, 4000])
 })
 
+test('continuation ignores recommendations created for a temporary ranking override', () => {
+  const rows = [
+    recommendation(1, 5923),
+    recommendation(2, 19260),
+  ]
+  const contexts = [
+    { code: '1', scoreType: 'SAY', candidateRank: 2000 },
+    { code: '2', scoreType: 'SAY', candidateRank: 15000 },
+  ]
+
+  assert.deepEqual(
+    advisorContinuationFloorByScore(rows, { SAY: 2000 }, contexts),
+    { SAY: 5923 },
+  )
+  assert.deepEqual(
+    advisorContinuationFloorByScore(rows, { SAY: 15000 }, contexts),
+    { SAY: 19260 },
+  )
+})
+
 test('free-form messages are routed to the correct interaction', () => {
   assert.equal(inferAdvisorIntent('Bana sıralamama yakın 5 tercih daha verir misin?'), 'more')
   assert.equal(inferAdvisorIntent('Sıralamama uygun yukarıdakilerden farklı 5 üniversite öner'), 'more')
@@ -142,6 +200,70 @@ test('free-form messages are routed to the correct interaction', () => {
   assert.equal(inferAdvisorIntent('Hangi üniversitenin kampüsü daha güzel?'), 'chat')
   assert.equal(inferAdvisorIntent('Hangi üniversiteyi seçmeliyim?'), 'recommend')
   assert.equal(isGreetingOnly('Merhaba! 😊'), true)
+})
+
+test('a ranking in the latest message creates a one-message override without mutating the profile', () => {
+  const profile = {
+    ranks: { SAY: 2000 },
+    selectedPrograms: [],
+  }
+
+  assert.deepEqual(
+    inferAdvisorRankOverride('15000 sıralamama göre üniversite öner', profile),
+    { scoreType: 'SAY', rank: 15000 },
+  )
+  assert.deepEqual(
+    inferAdvisorRankOverride('15 bin SAY sıralamayla seçenek göster', profile),
+    { scoreType: 'SAY', rank: 15000 },
+  )
+  assert.deepEqual(
+    inferAdvisorRankOverride('SAY sıralamam 15.000, yeni öneriler ver', profile),
+    { scoreType: 'SAY', rank: 15000 },
+  )
+  assert.deepEqual(
+    inferAdvisorRankOverride(
+      'Kod yazmayı ve matematiği seviyorum. 2000 SAY sıralamama göre 5 üniversite öner.',
+      profile,
+    ),
+    { scoreType: 'SAY', rank: 2000 },
+  )
+  assert.equal(
+    inferAdvisorRankOverride('Sıralamama göre 5 üniversite öner.', profile),
+    null,
+  )
+  assert.deepEqual(
+    inferAdvisorRankOverride(
+      '15000 sıralamama göre üniversite öner',
+      { ranks: { SAY: 2000, EA: 4000 }, selectedPrograms: [] },
+      ['SAY'],
+    ),
+    { scoreType: 'SAY', rank: 15000 },
+  )
+  assert.deepEqual(profile.ranks, { SAY: 2000 })
+})
+
+test('a follow-up recommendation request becomes a fresh continuation', () => {
+  assert.equal(
+    resolveAdvisorIntent('15000 sıralamama göre üniversite öner', 'chat', ['1001', '1002']),
+    'more',
+  )
+  assert.equal(
+    resolveAdvisorIntent('15000 sıralamama göre üniversite öner', 'chat', []),
+    'recommend',
+  )
+})
+
+test('fresh recommendation rows exclude earlier universities, including other fee variants', () => {
+  const rows = [
+    recommendation(1, 12000, 'Example University'),
+    recommendation(2, 14000, 'Example University'),
+    recommendation(3, 15000, 'Another University'),
+  ]
+
+  assert.deepEqual(
+    filterFreshAdvisorRows(rows, ['1'], ['Example University']).map(({ code }) => code),
+    ['3'],
+  )
 })
 
 test('requested recommendation counts default to five and stay between one and eight', () => {
