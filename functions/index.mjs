@@ -13,7 +13,8 @@ export const api = onRequest(
     region: 'europe-west3',
     timeoutSeconds: 90,
     memory: '512MiB',
-    maxInstances: 3,
+    // Keep one instance so the global in-process limits bound paid requests.
+    maxInstances: 1,
     secrets: [openAIKey],
   },
   app,

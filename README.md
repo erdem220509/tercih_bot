@@ -1,85 +1,68 @@
 # Pusula — YKS University Explorer
 
-Pusula searches the live YÖK Atlas catalog, compares four placement years, and loads the last placed student's published subject-net breakdown on demand.
+[Open Pusula](https://unipusulam.com) · Turkish and English interface
 
-## Local development
+Pusula helps students explore university programs in Türkiye using published YÖK Atlas placement data. It brings program search, historical rankings, last-placed-student net breakdowns, saved choices, student reviews, and an AI preference advisor into one place.
+
+## What you can do
+
+- Search programs by department, score type, city, university type, and teaching language.
+- Compare placement rankings and scores across the 2022–2025 placement years.
+- View the published subject-net breakdown for the last student placed in a program.
+- Enter your own ranking to make the result list easier to interpret.
+- Save interesting programs in your browser and return to them later.
+- Read anonymous student ratings and moderated written reviews.
+- Ask the AI advisor for a grounded shortlist based on your interests and preferences.
+
+## How to use Pusula
+
+1. Choose one or more programs and optionally add your YKS ranking, preferred cities, university type, or teaching language.
+2. Select **Explore programs** to load matching results.
+3. Open a result to see historical placement data, net breakdowns, language requirements when available, and student reviews.
+4. Save useful programs with the heart button or ask the AI advisor to help compare options.
+
+## Data and privacy
+
+Placement data and net breakdowns come from [YÖK Atlas](https://yokatlas.yok.gov.tr/). Pusula is an independent project and is not affiliated with YÖK, ÖSYM, or any university.
+
+Saved programs and interface preferences stay in your browser's local storage. Anonymous review ratings are stored by Pusula; written reviews are held for moderation before publication. If you use the AI advisor, the profile details and messages you submit are sent to the Pusula server and OpenAI to generate a reply. Pusula does not save advisor conversations, and OpenAI response storage is disabled for these requests.
+
+When analytics is configured, Pusula sends limited anonymous interaction events to PostHog. Entered rankings, review text, advisor messages, automatic click capture, persistent analytics identifiers, user profiles, and session recordings are not collected by the analytics configuration.
+
+Do not include names, phone numbers, email addresses, or other sensitive information in reviews or advisor messages.
+
+## Important limitations
+
+Pusula is a research and comparison tool, not an official preference guide or a guarantee of admission. Rankings, quotas, program codes, special conditions, and rules can change. Always verify your final choices in the current [ÖSYM](https://www.osym.gov.tr/) guide and on official university websites.
+
+Language-test information describes preparatory-school exemption requirements, not YKS admission requirements. Student reviews are subjective and are not official data. AI responses can be incomplete or mistaken even when they cite sources.
+
+## Run the project locally
+
+Requirements: Node.js 22 and npm.
 
 ```bash
 npm install
+cp .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:5173`. The API proxy runs on port `8787`.
+The website runs at `http://localhost:5173` and the local API at `http://localhost:8787`. University search works without an OpenAI key; the advisor requires a server-side `OPENAI_API_KEY` in `.env`.
 
-## Production
+Useful commands:
 
 ```bash
+npm test
+npm run lint
 npm run build
-npm start
 ```
 
-## Firebase deployment
+Never put the OpenAI key in a `VITE_` variable or commit an `.env` file. Firebase deployments bind `OPENAI_API_KEY` from Secret Manager; copy `functions/.env.example` to a project-specific local env file only when deployment configuration requires it.
 
-The production site uses Firebase Hosting for the Vite build and a second-generation Cloud Function
-for the Express API. Hosting rewrites `/api/**` to the function, so the browser and API stay on the
-same origin.
+## Contributing and security
 
-Prerequisites:
+Bug reports and focused pull requests are welcome. For a suspected vulnerability, follow [SECURITY.md](SECURITY.md) and do not publish exploit details or credentials in a public issue.
 
-- Enable billing (the Blaze plan) for the Firebase project. Second-generation functions require it.
-- Authenticate once with `npm run firebase:login`.
-- Select the intended project with `npx firebase use --add`.
+## Source availability
 
-Store the OpenAI API key in Firebase Secret Manager, then deploy:
-
-```bash
-npx firebase functions:secrets:set OPENAI_API_KEY
-npm run deploy
-```
-
-For later releases, `npm run deploy` is the only command needed. It creates a fresh production build,
-deploys both Hosting and the `api` function to the project selected in `.firebaserc`, suppresses verbose
-Firebase request logging, and applies the local IPv4 DNS workaround only if this network needs it.
-
-Do not create `functions/.env` with the production key. The `api` function is explicitly bound to the
-`OPENAI_API_KEY` secret, runs in `europe-west3`, and has a maximum instance count to constrain runaway
-cost. Also configure an OpenAI project budget and Google Cloud budget alerts.
-
-After the first deployment, connect the Squarespace-managed domain from Firebase Console under
-Hosting > Add custom domain. Copy the exact records Firebase shows into Squarespace DNS; do not guess
-the A, TXT, or CNAME values. Keep the default `web.app` address available until DNS and the managed
-TLS certificate show as connected.
-
-## University advisor
-
-The advisor uses OpenAI's Responses API with GPT-5.6 Luna at medium reasoning effort. University
-cards and placement figures always come from the same YÖK Atlas data used by the main search.
-The model can use web search for current university details and returns its web sources separately.
-
-Add your server-side API key to `.env`:
-
-```bash
-OPENAI_API_KEY=your_server_side_key
-OPENAI_MODEL=gpt-5.6-luna
-OPENAI_REASONING_EFFORT=medium
-```
-
-Keep the key on the server. Never expose it through a `VITE_` environment variable or browser code.
-The advisor endpoint returns a clear configuration error until `OPENAI_API_KEY` is set.
-
-### Production security
-
-Run the deployed server with `NODE_ENV=production` and set `APP_ORIGIN` to the public website origin
-(for example `https://pusula.example`).
-The server rejects production advisor requests from other browser origins and applies both per-IP and
-global in-memory request limits. Adjust `ADVISOR_IP_LIMIT` and `ADVISOR_GLOBAL_HOURLY_LIMIT` if needed.
-If the app runs behind a trusted reverse proxy, set `TRUST_PROXY=1` so per-IP limits see the visitor's
-address. Leave it unset when the Node server is directly exposed.
-
-Also set an OpenAI project budget/usage alert: application rate limits reduce abuse but cannot replace
-an account-level spending cap, especially when several server instances are running. Never commit
-`.env`; rotate the API key immediately if it is ever exposed in Git, browser code, logs, or screenshots.
-Advisor profile and message data is sent to the server and OpenAI to generate the response. Pusula does
-not persist it, and Responses API storage is disabled in the request with `store: false`.
-
-Placement data and nets come from YÖK Atlas. The comparison window is 2025–2022 because 2026 placement data does not exist before the 2026 preference and placement cycle finishes. Language-test values are preparatory-school exemption requirements, not YKS admission requirements, and link to official university sources. Always verify final quotas, program codes, conditions, and preference rules in the official ÖSYM guide.
+This repository is publicly viewable, but no open-source license has been granted. Unless a license is added later, the default copyright rules apply.

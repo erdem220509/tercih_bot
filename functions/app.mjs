@@ -21,6 +21,12 @@ const ADVISOR_GLOBAL_HOURLY_LIMIT = Math.max(
   ADVISOR_IP_LIMIT,
   Number(process.env.ADVISOR_GLOBAL_HOURLY_LIMIT) || 200,
 )
+const DATA_WINDOW_MS = 10 * 60 * 1000
+const DATA_IP_LIMIT = Math.max(1, Number(process.env.DATA_IP_LIMIT) || 180)
+const DATA_GLOBAL_HOURLY_LIMIT = Math.max(
+  DATA_IP_LIMIT,
+  Number(process.env.DATA_GLOBAL_HOURLY_LIMIT) || 3000,
+)
 const REVIEW_WINDOW_MS = 60 * 60 * 1000
 const REVIEW_IP_LIMIT = Math.max(1, Number(process.env.REVIEW_IP_LIMIT) || 5)
 const REVIEW_FIELDS = ['dorms', 'professors', 'campus', 'socialLife']
@@ -62,8 +68,11 @@ app.use((_req, res, next) => {
 })
 
 const cache = new Map()
+const CACHE_MAX_ENTRIES = 750
 const advisorRateLimit = new Map()
 const advisorGlobalRateLimit = { startedAt: Date.now(), count: 0 }
+const dataRateLimit = new Map()
+const dataGlobalRateLimit = { startedAt: Date.now(), count: 0 }
 const reviewRateLimit = new Map()
 const localReviewStore = new Map()
 
@@ -118,6 +127,11 @@ function cached(key, ttl, loader) {
   const hit = cache.get(key)
   if (hit && Date.now() - hit.savedAt < ttl) return Promise.resolve(hit.value)
   return loader().then((value) => {
+    if (cache.size >= CACHE_MAX_ENTRIES && !cache.has(key)) {
+      const oldestKey = cache.keys().next().value
+      if (oldestKey !== undefined) cache.delete(oldestKey)
+    }
+    cache.delete(key)
     cache.set(key, { value, savedAt: Date.now() })
     return value
   })
@@ -958,6 +972,41 @@ function consumeAdvisorQuota(ip) {
   return { allowed: true }
 }
 
+function consumeDataQuota(ip) {
+  const now = Date.now()
+
+  if (dataRateLimit.size > DATA_GLOBAL_HOURLY_LIMIT * 2) {
+    for (const [address, record] of dataRateLimit) {
+      if (now - record.startedAt > DATA_WINDOW_MS) dataRateLimit.delete(address)
+    }
+  }
+
+  if (now - dataGlobalRateLimit.startedAt > 60 * 60 * 1000) {
+    dataGlobalRateLimit.startedAt = now
+    dataGlobalRateLimit.count = 0
+  }
+  if (dataGlobalRateLimit.count >= DATA_GLOBAL_HOURLY_LIMIT) {
+    return { allowed: false, retryAfter: 3600 }
+  }
+
+  const record = dataRateLimit.get(ip)
+  if (!record || now - record.startedAt > DATA_WINDOW_MS) {
+    dataRateLimit.set(ip, { startedAt: now, count: 1 })
+    dataGlobalRateLimit.count += 1
+    return { allowed: true }
+  }
+  if (record.count >= DATA_IP_LIMIT) {
+    return {
+      allowed: false,
+      retryAfter: Math.max(1, Math.ceil((DATA_WINDOW_MS - (now - record.startedAt)) / 1000)),
+    }
+  }
+
+  record.count += 1
+  dataGlobalRateLimit.count += 1
+  return { allowed: true }
+}
+
 function normalizeUniversityReviewName(value) {
   return String(value || '')
     .trim()
@@ -1056,6 +1105,13 @@ app.get('/api/health', (_req, res) => {
   })
 })
 
+app.use(['/api/programs', '/api/cities', '/api/search', '/api/nets'], (req, res, next) => {
+  const quota = consumeDataQuota(req.ip || req.socket.remoteAddress || 'unknown')
+  if (quota.allowed) return next()
+  res.set('Retry-After', String(quota.retryAfter))
+  return res.status(429).json({ message: 'Too many data requests. Please try again later.' })
+})
+
 app.get('/api/programs', async (_req, res) => {
   try {
     const data = await cached('programs', 12 * 60 * 60 * 1000, () =>
@@ -1092,18 +1148,36 @@ app.post('/api/search', async (req, res) => {
     cityCode = null,
     cityCodes = null,
   } = req.body || {}
-  if (!Number.isInteger(Number(programId)) || !scoreType) {
-    return res.status(400).json({ message: 'programId and scoreType are required.' })
+  const normalizedProgramId = Number(programId)
+  const normalizedScoreType = scoreTypeKey(scoreType)
+  const normalizedPage = Number(page)
+  const validScoreTypes = new Set(['TYT', 'SAY', 'EA', 'SÖZ', 'DİL'])
+  const validUniversityTypes = new Set([null, 'DEVLET', 'VAKIF'])
+  if (
+    !Number.isSafeInteger(normalizedProgramId)
+    || normalizedProgramId < 1
+    || normalizedProgramId > 1_000_000_000
+    || !validScoreTypes.has(normalizedScoreType)
+    || !Number.isInteger(normalizedPage)
+    || normalizedPage < 0
+    || normalizedPage > 20
+    || !validUniversityTypes.has(universityType)
+  ) {
+    return res.status(400).json({ message: 'Invalid search filters.' })
   }
 
   const selectedCityCodes = Array.isArray(cityCodes) ? cityCodes : cityCode ? [cityCode] : []
+  const normalizedCityCodes = selectedCityCodes
+    .slice(0, 81)
+    .map(Number)
+    .filter((code) => Number.isInteger(code) && code >= 1 && code <= 81)
   const payload = buildSearchPayload({
-    programId,
-    scoreType,
-    page,
+    programId: normalizedProgramId,
+    scoreType: normalizedScoreType,
+    page: normalizedPage,
     size,
     universityType,
-    cityCodes: selectedCityCodes,
+    cityCodes: normalizedCityCodes,
   })
 
   const key = `search:${JSON.stringify(payload)}`
@@ -1120,14 +1194,18 @@ app.post('/api/search', async (req, res) => {
 
 app.post('/api/nets', async (req, res) => {
   const { year = 2025, programCode } = req.body || {}
-  if (!programCode) return res.status(400).json({ message: 'programCode is required.' })
+  const normalizedYear = Number(year)
+  const normalizedProgramCode = String(programCode || '').trim()
+  if (![2022, 2023, 2024, 2025].includes(normalizedYear) || !/^\d{6,20}$/.test(normalizedProgramCode)) {
+    return res.status(400).json({ message: 'A valid placement year and program code are required.' })
+  }
 
   const payload = {
-    filters: { yil: Number(year), kilavuzKodu: String(programCode) },
+    filters: { yil: normalizedYear, kilavuzKodu: normalizedProgramCode },
     page: 0,
     size: 10,
   }
-  const key = `nets:${year}:${programCode}`
+  const key = `nets:${normalizedYear}:${normalizedProgramCode}`
   try {
     const data = await cached(key, 24 * 60 * 60 * 1000, () =>
       yokFetch('/netler/search', { method: 'POST', body: JSON.stringify(payload) }),

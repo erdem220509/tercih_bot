@@ -7,10 +7,19 @@ import './mobile.css'
 import './updates.css'
 import './advisor.css'
 
-posthog.init(import.meta.env.VITE_PUBLIC_POSTHOG_KEY, {
-  api_host: import.meta.env.VITE_PUBLIC_POSTHOG_HOST,
-  defaults: '2026-05-30',
-})
+const posthogKey = import.meta.env.VITE_PUBLIC_POSTHOG_KEY
+if (posthogKey) {
+  posthog.init(posthogKey, {
+    api_host: import.meta.env.VITE_PUBLIC_POSTHOG_HOST,
+    defaults: '2026-05-30',
+    autocapture: false,
+    capture_pageview: false,
+    capture_pageleave: false,
+    disable_session_recording: true,
+    person_profiles: 'never',
+    persistence: 'memory',
+  })
+}
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
