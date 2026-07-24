@@ -5,12 +5,16 @@ import {
   advisorSelectionBand,
   advisorSuggestionStep,
   classifyAdvisorFit,
+  descendingRankWindowPages,
   enforceAdvisorFitLabels,
+  ensureAdvisorRecommendationCoverage,
   filterFreshAdvisorRows,
+  findAdvisorPrograms,
   inferAdvisorRankOverride,
   inferAdvisorIntent,
   isGreetingOnly,
   requestedAdvisorRecommendationCount,
+  resolveAdvisorConversationProfile,
   resolveAdvisorIntent,
   selectAdvisorRecommendations,
   shouldReturnAdvisorRecommendationMetadata,
@@ -24,6 +28,12 @@ function recommendation(code, rank, university = `University ${code}`) {
     rank,
   }
 }
+
+test('descending rank windows fetch enough final pages to fill the requested limit', () => {
+  assert.deepEqual(descendingRankWindowPages(242, 500), [0])
+  assert.deepEqual(descendingRankWindowPages(1000, 500), [1])
+  assert.deepEqual(descendingRankWindowPages(1123, 500), [1, 2])
+})
 
 test('selection bands scale with the candidate ranking', () => {
   const lowRankBand = advisorSelectionBand(1500)
@@ -76,6 +86,36 @@ test('visible recommendation labels are corrected from structured fit metadata',
   assert.match(corrected, /113 — \*\*İddialı\*\*/)
   assert.match(corrected, /2\.050 — \*\*Uygun\*\*/)
   assert.match(corrected, /“Uygun” etiketi/)
+})
+
+test('a populated YÖK shortlist replaces an answer that falsely claims it is empty', () => {
+  const recommendations = [
+    {
+      university: 'MERSİN ÜNİVERSİTESİ',
+      program: 'Tıp',
+      city: 'Mersin',
+      rank: 13043,
+      fit: 'reach',
+    },
+    {
+      university: 'PAMUKKALE ÜNİVERSİTESİ',
+      program: 'Tıp',
+      city: 'Denizli',
+      rank: 13350,
+      fit: 'safe',
+    },
+  ]
+
+  const corrected = ensureAdvisorRecommendationCoverage(
+    'Resmî YÖK Atlas kısa listesi boş geldi.',
+    recommendations,
+    'recommend',
+    'tr',
+  )
+
+  assert.match(corrected, /MERSİN ÜNİVERSİTESİ/)
+  assert.match(corrected, /PAMUKKALE ÜNİVERSİTESİ/)
+  assert.doesNotMatch(corrected, /boş geldi/)
 })
 
 test('general recommendations contain at most one nearby reach option', () => {
@@ -199,7 +239,47 @@ test('free-form messages are routed to the correct interaction', () => {
   assert.equal(inferAdvisorIntent('Bugün nasılsın, biraz sohbet edelim'), 'chat')
   assert.equal(inferAdvisorIntent('Hangi üniversitenin kampüsü daha güzel?'), 'chat')
   assert.equal(inferAdvisorIntent('Hangi üniversiteyi seçmeliyim?'), 'recommend')
+  assert.equal(inferAdvisorIntent('Sadece rastgele 5 üniversite istiyorum'), 'recommend')
+  assert.equal(inferAdvisorIntent('Rastgele üniversiteler söyle, fikir almak istiyorum'), 'recommend')
+  assert.equal(inferAdvisorIntent('15 bin sıralamayla hangi üniversitelere girebilirim?'), 'recommend')
   assert.equal(isGreetingOnly('Merhaba! 😊'), true)
+})
+
+test('conversation details are reused instead of being asked for again', () => {
+  const history = [
+    { role: 'user', content: '15 bin sıralamayla hangi üniversitelere girebilirim?' },
+    { role: 'assistant', content: 'Hangi puan türü?' },
+    { role: 'user', content: 'sayısal' },
+    { role: 'assistant', content: 'Hangi bölüm?' },
+    { role: 'user', content: 'bilgisayar mühendsiliği' },
+    { role: 'assistant', content: 'Hangi dil?' },
+    { role: 'user', content: 'ingilizce' },
+  ]
+  const resolved = resolveAdvisorConversationProfile(
+    { ranks: {}, language: 'ALL', universityType: 'ALL', selectedPrograms: [] },
+    history,
+    '15000',
+  )
+
+  assert.equal(resolved.profile.ranks.SAY, 15000)
+  assert.equal(resolved.profile.language, 'EN')
+  assert.match(resolved.contextText, /bilgisayar mühendsiliği/)
+  assert.equal(resolveAdvisorIntent('15000', 'chat', [], history), 'recommend')
+})
+
+test('an explicitly named program is recovered from conversation text despite a small typo', () => {
+  const catalog = [
+    { birimGrupId: 1, birimGrupAdi: 'Bilgisayar Mühendisliği', puanTuru: 'SAY' },
+    { birimGrupId: 2, birimGrupAdi: 'Yazılım Mühendisliği', puanTuru: 'SAY' },
+    { birimGrupId: 3, birimGrupAdi: 'Tıp', puanTuru: 'SAY' },
+  ]
+  const programs = findAdvisorPrograms(
+    catalog,
+    { ranks: { SAY: 15000 }, selectedPrograms: [] },
+    'sayısal 15000 bilgisayar mühendsiliği ingilizce',
+  )
+
+  assert.deepEqual(programs.map(({ birimGrupId }) => birimGrupId), [1])
 })
 
 test('a ranking in the latest message creates a one-message override without mutating the profile', () => {
@@ -242,14 +322,22 @@ test('a ranking in the latest message creates a one-message override without mut
   assert.deepEqual(profile.ranks, { SAY: 2000 })
 })
 
-test('a follow-up recommendation request becomes a fresh continuation', () => {
+test('only explicit continuation wording excludes earlier recommendations', () => {
   assert.equal(
     resolveAdvisorIntent('15000 sıralamama göre üniversite öner', 'chat', ['1001', '1002']),
-    'more',
+    'recommend',
   )
   assert.equal(
     resolveAdvisorIntent('15000 sıralamama göre üniversite öner', 'chat', []),
     'recommend',
+  )
+  assert.equal(
+    resolveAdvisorIntent('hayır fark etmiyor sadece üniversite göster', 'chat', ['1001', '1002']),
+    'recommend',
+  )
+  assert.equal(
+    resolveAdvisorIntent('başka 5 üniversite daha göster', 'chat', ['1001', '1002']),
+    'more',
   )
 })
 

@@ -221,16 +221,18 @@
 }
 
 .advisor-context-bar {
+  padding: 9px 10px;
   border-bottom: 1px solid var(--line);
-  background: #f1eee6;
+  background: #f6f3eb;
 }
 
 .advisor-context-bar > button {
   width: 100%;
   height: 41px;
   padding: 0 14px;
-  border: 0;
-  background: transparent;
+  border: 1px solid #d4d0c6;
+  border-radius: 8px;
+  background: #fff;
   color: var(--ink);
   display: grid;
   grid-template-columns: 17px auto minmax(0, 1fr) 16px;
@@ -238,6 +240,13 @@
   gap: 8px;
   text-align: left;
   cursor: pointer;
+  box-shadow: 0 2px 8px #1820190a;
+  transition: border-color .16s ease, background .16s ease;
+}
+
+.advisor-context-bar > button:hover {
+  border-color: #9bb2e8;
+  background: #f8faff;
 }
 
 .advisor-context-bar > button > span {
@@ -971,4 +980,84 @@
   .advisor-privacy-tooltip {
     transition: none;
   }
+}
+
+html[data-theme="dark"] .advisor-panel {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .advisor-header,
+html[data-theme="dark"] .advisor-launcher,
+html[data-theme="dark"] .advisor-avatar {
+  background: #0b110d;
+  color: #fff;
+}
+
+html[data-theme="dark"] .advisor-privacy-tooltip,
+html[data-theme="dark"] .advisor-profile,
+html[data-theme="dark"] .advisor-context-bar,
+html[data-theme="dark"] .advisor-messages,
+html[data-theme="dark"] .advisor-quick-prompts,
+html[data-theme="dark"] .advisor-footer {
+  background: #141c16;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+html[data-theme="dark"] .advisor-privacy-tooltip::before {
+  border-color: var(--line);
+  background: #141c16;
+}
+
+html[data-theme="dark"] .advisor-context-bar > button,
+html[data-theme="dark"] .advisor-profile textarea,
+html[data-theme="dark"] .advisor-profile input,
+html[data-theme="dark"] .advisor-profile select,
+html[data-theme="dark"] .advisor-bubble,
+html[data-theme="dark"] .advisor-recommendation,
+html[data-theme="dark"] .advisor-sources a,
+html[data-theme="dark"] .advisor-quick-prompts button,
+html[data-theme="dark"] .advisor-composer {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .advisor-context-bar > button:hover,
+html[data-theme="dark"] .advisor-recommendation:hover,
+html[data-theme="dark"] .advisor-quick-prompts button:hover {
+  background: #223027;
+}
+
+html[data-theme="dark"] .advisor-message.user .advisor-bubble {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: #fff;
+}
+
+html[data-theme="dark"] .advisor-bubble strong,
+html[data-theme="dark"] .advisor-bubble h1,
+html[data-theme="dark"] .advisor-bubble h2,
+html[data-theme="dark"] .advisor-bubble h3,
+html[data-theme="dark"] .advisor-recommendation strong,
+html[data-theme="dark"] .advisor-recommendation-meta b {
+  color: var(--ink);
+}
+
+html[data-theme="dark"] .advisor-bubble.error {
+  border-color: #74443f;
+  background: #3c2422;
+  color: #f0aaa3;
+}
+
+html[data-theme="dark"] .advisor-sources {
+  border-color: #4969ae;
+  background: #17243d;
+}
+
+html[data-theme="dark"] .advisor-footer p,
+html[data-theme="dark"] .advisor-provider {
+  color: var(--muted);
 }

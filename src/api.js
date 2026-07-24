@@ -7,6 +7,13 @@ async function request(path, options) {
 
 export const getPrograms = () => request('/api/programs')
 export const getCities = () => request('/api/cities')
+export const getUniversities = () => request('/api/universities')
+
+export const discoverPrograms = (filters) => request('/api/discover', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(filters),
+})
 
 export const searchPrograms = (filters) => request('/api/search', {
   method: 'POST',

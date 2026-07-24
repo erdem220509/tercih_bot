@@ -37,6 +37,35 @@ test('search rejects unbounded or unsupported filters before contacting upstream
   assert.deepEqual(await response.json(), { message: 'Invalid search filters.' })
 })
 
+test('discovery rejects reversed ranking bounds before contacting upstream', async (context) => {
+  const baseUrl = await withServer(context)
+  const response = await fetch(`${baseUrl}/api/discover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ minRank: 50000, maxRank: 1000 }),
+  })
+
+  assert.equal(response.status, 400)
+  assert.deepEqual(await response.json(), { message: 'Invalid discovery filters.' })
+})
+
+test('ranking endpoints reject unsupported sort directions before contacting upstream', async (context) => {
+  const baseUrl = await withServer(context)
+  const discoveryResponse = await fetch(`${baseUrl}/api/discover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ direction: 'SIDEWAYS' }),
+  })
+  const searchResponse = await fetch(`${baseUrl}/api/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ programId: 1, scoreType: 'SAY', direction: 'SIDEWAYS' }),
+  })
+
+  assert.equal(discoveryResponse.status, 400)
+  assert.equal(searchResponse.status, 400)
+})
+
 test('net lookup rejects arbitrary years and program identifiers', async (context) => {
   const baseUrl = await withServer(context)
   const response = await fetch(`${baseUrl}/api/nets`, {

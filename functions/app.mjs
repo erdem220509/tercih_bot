@@ -158,6 +158,64 @@ async function yokFetch(route, options = {}) {
   }
 }
 
+function descendingRankWindowPages(totalElements, size) {
+  const total = Math.max(0, Number(totalElements) || 0)
+  const pageSize = Math.max(1, Number(size) || 1)
+  if (!total) return [0]
+
+  const lastPage = Math.floor((total - 1) / pageSize)
+  const lastPageSize = total % pageSize
+  return lastPage > 0 && lastPageSize
+    ? [lastPage - 1, lastPage]
+    : [lastPage]
+}
+
+async function yokFetchRankWindow(payload) {
+  if (payload.direction !== 'DESC') {
+    return yokFetch('/tercih-kilavuz/search', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  }
+
+  // YÖK Atlas currently ignores DESC for this endpoint. Exclude unplaced rows,
+  // find the real final page from totalElements, and build the last full window.
+  const pageSize = Math.max(1, Number(payload.size) || 500)
+  const ascendingPayload = {
+    ...payload,
+    page: 0,
+    direction: 'ASC',
+    filters: {
+      ...payload.filters,
+      maxBasariSirasi: payload.filters.maxBasariSirasi ?? 10_000_000,
+    },
+  }
+  const firstPage = await yokFetch('/tercih-kilavuz/search', {
+    method: 'POST',
+    body: JSON.stringify(ascendingPayload),
+  })
+  const pages = descendingRankWindowPages(firstPage.totalElements, pageSize)
+  const pageResponses = await Promise.all(pages.map((page) => page === 0
+    ? firstPage
+    : yokFetch('/tercih-kilavuz/search', {
+        method: 'POST',
+        body: JSON.stringify({ ...ascendingPayload, page }),
+      })))
+  const content = pageResponses
+    .flatMap((response) => response.content || [])
+    .filter((row) => Number(row.basariSirasi) > 0)
+    .sort((a, b) => Number(a.basariSirasi) - Number(b.basariSirasi))
+    .slice(-pageSize)
+    .reverse()
+
+  return {
+    ...firstPage,
+    content,
+    number: 0,
+    size: pageSize,
+  }
+}
+
 function normalizeText(value) {
   return String(value || '')
     .toLocaleLowerCase('tr-TR')
@@ -220,12 +278,25 @@ function inferAdvisorIntent(message, requestedIntent = 'chat') {
       /\b(hangi|which)\s+(universite\w*|bolum\w*|program\w*|tercih\w*|secenek\w*|universit\w*|college\w*)\b/.test(text)
       && /\b(uygun\w*|secmeli\w*|yazmali\w*|tercih\w*|choose\w*)\b/.test(text)
     )
+    || (
+      /\b(tercih\w*|secenek\w*|oneri\w*|program\w*|universite\w*|bolum\w*|option\w*|suggestion\w*|recommendation\w*|universit\w*|college\w*)\b/.test(text)
+      && /\b(istiyorum|isterim|soyle\w*|ver\w*|say\w*|girebilir\w*|gelir\w*|tutar\w*|bakabilir\w*|want\w*|give\w*|name\w*|enter\w*|get\s+into)\b/.test(text)
+    )
+    || (
+      /\b(rastgele|ornek|fikir|random|example)\b/.test(text)
+      && /\b(universite\w*|program\w*|secenek\w*|universit\w*|college\w*|option\w*)\b/.test(text)
+    )
   if (asksForRecommendations) return 'recommend'
   return 'chat'
 }
 
 function parseAdvisorRanking(message) {
   const text = normalizeText(message).replaceAll(',', '.')
+  const bareRank = text.match(/^\s*(\d{4,7})\s*$/)
+  if (bareRank) {
+    const rank = Number(bareRank[1])
+    return rank >= 1 && rank <= 3_000_000 ? rank : null
+  }
   const numberPattern = '(?<number>\\d{1,3}(?:[.\\s]\\d{3})+|\\d{1,7})'
   const patterns = [
     new RegExp(`${numberPattern}\\s*(?<suffix>bin|k)?\\s*(?:siralam\\w*|sira\\w*|rank\\w*)`),
@@ -247,6 +318,76 @@ function parseAdvisorRanking(message) {
   let rank = Number(compact)
   if (match.groups.suffix && rank < 1000) rank *= 1000
   return Number.isInteger(rank) && rank >= 1 && rank <= 3_000_000 ? rank : null
+}
+
+function inferAdvisorScoreType(value) {
+  const text = normalizeText(value)
+  const candidates = [
+    ['TYT', /\btyt\b/g],
+    ['SAY', /\b(?:say|sayisal)\b/g],
+    ['EA', /\b(?:ea|esit\s+agirlik)\b/g],
+    ['SÖZ', /\b(?:soz|sozel)\b/g],
+    ['DİL', /\b(?:dil|yabanci\s+dil)\b/g],
+  ]
+  let latest = null
+  for (const [scoreType, pattern] of candidates) {
+    for (const match of text.matchAll(pattern)) {
+      if (!latest || match.index > latest.index) latest = { scoreType, index: match.index }
+    }
+  }
+  return latest?.scoreType || null
+}
+
+function latestAdvisorPreference(value, options) {
+  const text = normalizeText(value)
+  let latest = null
+  for (const [preference, pattern] of options) {
+    for (const match of text.matchAll(pattern)) {
+      if (!latest || match.index > latest.index) latest = { preference, index: match.index }
+    }
+  }
+  return latest?.preference || null
+}
+
+function resolveAdvisorConversationProfile(profile = {}, history = [], message = '') {
+  const userTurns = [
+    ...(Array.isArray(history) ? history : [])
+      .filter((item) => item?.role === 'user')
+      .map((item) => String(item.content || '').trim())
+      .filter(Boolean),
+    String(message || '').trim(),
+  ].filter(Boolean)
+  const contextText = userTurns.join('\n')
+  const scoreType = inferAdvisorScoreType(contextText)
+    || Object.entries(profile.ranks || {}).find(([, rank]) => Number(rank) > 0)?.[0]
+    || (Array.isArray(profile.selectedPrograms) && profile.selectedPrograms.length === 1
+      ? profile.selectedPrograms[0].puanTuru
+      : null)
+  let latestRank = null
+  userTurns.forEach((turn) => {
+    const rank = parseAdvisorRanking(turn)
+    if (rank) latestRank = rank
+  })
+  const teachingLanguage = latestAdvisorPreference(contextText, [
+    ['EN', /\b(?:ingilizce|english)\b/g],
+    ['TR', /\b(?:turkce|turkish)\b/g],
+  ])
+  const universityType = latestAdvisorPreference(contextText, [
+    ['DEVLET', /\b(?:devlet|public)\b/g],
+    ['VAKIF', /\b(?:vakif|foundation|private)\b/g],
+  ])
+
+  return {
+    contextText,
+    profile: {
+      ...profile,
+      ranks: latestRank && scoreType
+        ? { ...(profile.ranks || {}), [scoreTypeKey(scoreType)]: latestRank }
+        : { ...(profile.ranks || {}) },
+      language: teachingLanguage || profile.language || 'ALL',
+      universityType: universityType || profile.universityType || 'ALL',
+    },
+  }
 }
 
 function inferAdvisorRankOverride(message, profile = {}, contextScoreTypes = []) {
@@ -276,9 +417,33 @@ function inferAdvisorRankOverride(message, profile = {}, contextScoreTypes = [])
   return scoreType ? { scoreType, rank } : null
 }
 
-function resolveAdvisorIntent(message, requestedIntent, previousRecommendationCodes = []) {
-  const intent = inferAdvisorIntent(message, requestedIntent)
-  return intent === 'recommend' && previousRecommendationCodes.length ? 'more' : intent
+function isAdvisorPreferenceAnswer(message) {
+  const text = normalizeText(message)
+  return Boolean(
+    inferAdvisorScoreType(text)
+    || parseAdvisorRanking(message)
+    || /\b(?:ingilizce|english|turkce|turkish|devlet|public|vakif|foundation|private)\b/.test(text)
+    || /\b(?:muhendis\w*|muhendsi\w*|tip|hukuk|psikoloji|mimarlik|eczacilik|hemsirelik|ogretmen\w*|bilgisayar|yazilim|bolum\w*)\b/.test(text)
+    || /\b(?:fark\s*etmez|onemli\s*degil|no\s+preference)\b/.test(text)
+  )
+}
+
+function resolveAdvisorIntent(message, requestedIntent, _previousRecommendationCodes = [], history = []) {
+  // Only explicit continuation wording ("başka", "daha", "more", etc.) may
+  // exclude earlier recommendations. A correction such as "sadece üniversite
+  // göster" is a fresh recommendation request and must be allowed to reuse the
+  // official YÖK Atlas rows already seen in the conversation.
+  const inferred = inferAdvisorIntent(message, requestedIntent)
+  if (inferred !== 'chat' || !isAdvisorPreferenceAnswer(message)) return inferred
+
+  const previousRecommendationRequest = [...history]
+    .reverse()
+    .filter((item) => item?.role === 'user')
+    .map((item) => inferAdvisorIntent(item.content))
+    .find((intent) => intent !== 'chat')
+  return ['recommend', 'more', 'safer'].includes(previousRecommendationRequest)
+    ? 'recommend'
+    : inferred
 }
 
 function filterFreshAdvisorRows(rows, previousRecommendationCodes = [], previousRecommendationUniversities = []) {
@@ -368,14 +533,18 @@ function buildSearchPayload({
   scoreType,
   page = 0,
   size = 500,
+  direction = 'ASC',
   universityType = null,
   cityCodes = [],
+  universityId = null,
+  minRank = null,
+  maxRank = null,
 }) {
   const selectedCityCodes = cityCodes.map(Number).filter(Number.isInteger)
   return {
     filters: {
       puanTuru: scoreType,
-      universiteId: null,
+      universiteId: universityId,
       birimGrupId: [Number(programId)],
       ilKodu: selectedCityCodes.length ? [...new Set(selectedCityCodes)] : null,
       birimTuruId: scoreType === 'TYT' ? null : 46,
@@ -383,17 +552,66 @@ function buildSearchPayload({
       bursOraniId: null,
       ogrenimTuruId: null,
       kilavuzKodu: null,
-      minBasariSirasi: null,
-      maxBasariSirasi: null,
+      minBasariSirasi: minRank,
+      maxBasariSirasi: maxRank,
     },
     page: Math.max(0, Number(page) || 0),
     size: Math.min(1000, Math.max(20, Number(size) || 500)),
     sortBy: 'basariSirasi',
-    direction: 'ASC',
+    direction: direction === 'DESC' ? 'DESC' : 'ASC',
   }
 }
 
 function findAdvisorPrograms(catalog, profile, message) {
+  const contextText = normalizeText(message)
+  const contextTokens = contextText.match(/\p{L}+/gu) || []
+  const differsByAtMostOneCharacter = (left, right) => {
+    if (left === right) return true
+    if (Math.abs(left.length - right.length) > 1) return false
+    if (left.length === right.length) {
+      const mismatch = [...left].findIndex((character, index) => character !== right[index])
+      if (
+        mismatch >= 0
+        && mismatch + 1 < left.length
+        && left[mismatch] === right[mismatch + 1]
+        && left[mismatch + 1] === right[mismatch]
+        && left.slice(mismatch + 2) === right.slice(mismatch + 2)
+      ) return true
+    }
+    let leftIndex = 0
+    let rightIndex = 0
+    let edits = 0
+    while (leftIndex < left.length && rightIndex < right.length) {
+      if (left[leftIndex] === right[rightIndex]) {
+        leftIndex += 1
+        rightIndex += 1
+        continue
+      }
+      edits += 1
+      if (edits > 1) return false
+      if (left.length > right.length) leftIndex += 1
+      else if (right.length > left.length) rightIndex += 1
+      else {
+        leftIndex += 1
+        rightIndex += 1
+      }
+    }
+    return edits + Number(leftIndex < left.length || rightIndex < right.length) <= 1
+  }
+  const explicitlyMentioned = catalog.filter((program) => {
+    const programTokens = normalizeText(program.birimGrupAdi).match(/\p{L}+/gu) || []
+    return programTokens.length > 0 && programTokens.every((programToken) =>
+      contextTokens.some((contextToken) =>
+        programToken === contextToken
+        || (programToken.length >= 6 && contextToken.length >= 6
+          && differsByAtMostOneCharacter(programToken, contextToken))))
+  })
+  if (explicitlyMentioned.length) {
+    return explicitlyMentioned
+      .sort((a, b) => b.birimGrupAdi.length - a.birimGrupAdi.length)
+      .slice(0, 5)
+  }
+
   const byKey = new Map(catalog.map((program) => [
     `${program.birimGrupId}-${scoreTypeKey(program.puanTuru)}`,
     program,
@@ -829,6 +1047,42 @@ function enforceAdvisorFitLabels(answer, recommendations = [], language = 'tr') 
   }).join('')
 }
 
+function advisorRecommendationFallback(recommendations, language = 'tr') {
+  const rankLocale = language === 'tr' ? 'tr-TR' : 'en-US'
+  const heading = language === 'tr'
+    ? 'YÖK Atlas verilerine göre seçenekler:'
+    : 'Options based on YÖK Atlas data:'
+  const rankingLabel = language === 'tr' ? '2025 taban sıralaması' : '2025 cutoff rank'
+  const reminder = language === 'tr'
+    ? 'Tercih döneminde güncel ÖSYM kılavuzunu ve üniversitelerin özel koşullarını kontrol et.'
+    : 'Check the current ÖSYM guide and each university’s special conditions during the preference period.'
+  const items = recommendations.map((recommendation, index) => {
+    const rank = Number(recommendation.rank)
+    const formattedRank = rank > 0 ? rank.toLocaleString(rankLocale) : '—'
+    const details = [recommendation.program, recommendation.city].filter(Boolean).join(', ')
+    return `${index + 1}. **${recommendation.university}**${details ? ` — ${details}` : ''}; ${rankingLabel}: ${formattedRank} · **${advisorFitLabel(recommendation.fit, language)}**`
+  })
+
+  return [heading, '', ...items, '', reminder].join('\n')
+}
+
+function ensureAdvisorRecommendationCoverage(
+  answer,
+  recommendations = [],
+  intent = 'chat',
+  language = 'tr',
+) {
+  const localized = enforceAdvisorFitLabels(answer, recommendations, language)
+  if (!shouldReturnAdvisorRecommendationMetadata(intent) || !recommendations.length) return localized
+
+  const normalizedAnswer = normalizeText(localized)
+  const includesEveryUniversity = recommendations.every(({ university }) =>
+    university && normalizedAnswer.includes(normalizeText(university)))
+  return includesEveryUniversity
+    ? localized
+    : advisorRecommendationFallback(recommendations, language)
+}
+
 function sourceFromUrl(url, title = '') {
   try {
     const parsed = new URL(url)
@@ -876,6 +1130,9 @@ async function openAIAdvisor(payload) {
       'You are Pusula University Advisor for YKS candidates in Türkiye.',
       'Have a genuine conversation: answer the latest message directly, use conversation history, and never repeat a generic shortlist when the user asks a follow-up.',
       'Act on the requested interaction exactly rather than merely restating the candidate profile.',
+      'Never ask again for a ranking, score type, program, teaching language, city preference, or university type that already appears in the candidate profile or recent conversation.',
+      'If the candidate explicitly asks for examples, random universities, only names, or says not to ask more questions, return the supplied shortlist immediately. Do not lecture them about why more detail would be better.',
+      'For a recommendation-bearing intent, a non-empty supplied shortlist means you must answer with that shortlist now. Asking a follow-up question instead is a failed response.',
       'The candidate profile already includes any ranking stated in the latest message. Treat that latest ranking as authoritative for this reply; never keep using, mention, or apologize for an older ranking.',
       'For a chat intent without a recommendation request, answer conversationally and do not introduce universities or a shortlist.',
       'For a city intent, do not name or repeat the recommendation shortlist. Give a concise city-focused answer, preferably a practical pros/cons comparison covering living costs, housing, transport, campus life, internship/industry access, and how much the city filter narrows program choices.',
@@ -886,6 +1143,7 @@ async function openAIAdvisor(payload) {
       'The application has already queried YÖK Atlas to build the supplied shortlist. Never ask the user to upload, paste, or provide a larger official list when shortlist items are present.',
       'The structured shortlist is authoritative for placement figures. Never replace, estimate, or contradict those numbers with web results.',
       'When a shortlist is supplied, it is already the exact card list and display order. Preserve it without adding, removing, substituting, or reordering universities. If it is empty, do not invent or repeat a previous shortlist.',
+      'An empty shortlist means that the current program and profile filters found no matching rows; it does not mean that the YÖK Atlas API is unavailable or returned no data overall. Never describe an empty filtered shortlist as an API or official-data outage.',
       'Fit classes are calculated from the candidate ranking for the matching score type using a strict 300-rank window: match is at most 300 ranks in either direction, reach is more than 300 ranks lower/more selective, and safe is more than 300 ranks higher/less selective. A candidate rank of 2,000 versus a cutoff rank of 113 is always reach, never match. Preserve each supplied classification; never infer or recalculate it.',
       'Localize every displayed fit label to the reply language. In Turkish, always write İddialı for reach, Uygun for match, and Daha güvenli for safe/safer. Never show the English words reach, match, safe, or safer anywhere in a Turkish reply, including headings, tables, parentheses, and explanations. In English, use Reach, Match, and Safer.',
       'If a shortlist item has neutral fit because no ranking exists for its score type, write Sıralama değerlendirilmedi in Turkish or Ranking not evaluated in English. Never describe a neutral item as match/Uygun.',
@@ -899,7 +1157,7 @@ async function openAIAdvisor(payload) {
       'Never invent placement data, language requirements, quotas, campus facts, or admission guarantees.',
       'Connect recommendations to the candidate’s interests and score-type ranking.',
       'Explain the localized fit labels as comparison bands, not admission probabilities.',
-      'Keep the answer warm, practical, and concise. Ask at most one focused follow-up question if important profile information is missing.',
+      'Keep the answer warm, practical, and concise. Lead with the answer, omit generic introductions and repeated context, and keep ordinary replies under 350 words. Recommendation replies may be longer only when needed to include every supplied item. Ask at most one focused follow-up question only when no useful shortlist can be built; otherwise make reasonable defaults and answer.',
       'End with a brief reminder to verify the current ÖSYM guide and university conditions.',
     ].join(' '),
     input: advisorPrompt(payload),
@@ -914,7 +1172,7 @@ async function openAIAdvisor(payload) {
     tool_choice: 'auto',
     include: ['web_search_call.action.sources'],
     store: false,
-    max_output_tokens: 1400,
+    max_output_tokens: 1600,
   })
   return {
     answer: response.output_text?.trim() || '',
@@ -1067,6 +1325,39 @@ function reviewSummaryData(summary = {}, reviews = []) {
   }
 }
 
+function buildDiscoverPayload({
+  scoreType = null,
+  page = 0,
+  size = 500,
+  direction = 'ASC',
+  universityType = null,
+  cityCodes = [],
+  universityId = null,
+  minRank = null,
+  maxRank = null,
+}) {
+  const selectedCityCodes = cityCodes.map(Number).filter(Number.isInteger)
+  return {
+    filters: {
+      puanTuru: scoreType,
+      universiteId: universityId,
+      birimGrupId: null,
+      ilKodu: selectedCityCodes.length ? [...new Set(selectedCityCodes)] : null,
+      birimTuruId: scoreType && scoreType !== 'TYT' ? 46 : null,
+      universiteTuru: universityType || null,
+      bursOraniId: null,
+      ogrenimTuruId: null,
+      kilavuzKodu: null,
+      minBasariSirasi: minRank,
+      maxBasariSirasi: maxRank,
+    },
+    page: Math.max(0, Number(page) || 0),
+    size: Math.min(1000, Math.max(20, Number(size) || 500)),
+    sortBy: 'basariSirasi',
+    direction: direction === 'DESC' ? 'DESC' : 'ASC',
+  }
+}
+
 async function loadUniversityReviews(university) {
   const name = normalizeUniversityReviewName(university)
   const key = universityReviewKey(name)
@@ -1105,7 +1396,7 @@ app.get('/api/health', (_req, res) => {
   })
 })
 
-app.use(['/api/programs', '/api/cities', '/api/search', '/api/nets'], (req, res, next) => {
+app.use(['/api/programs', '/api/cities', '/api/universities', '/api/discover', '/api/search', '/api/nets'], (req, res, next) => {
   const quota = consumeDataQuota(req.ip || req.socket.remoteAddress || 'unknown')
   if (quota.allowed) return next()
   res.set('Retry-After', String(quota.retryAfter))
@@ -1138,21 +1429,134 @@ app.get('/api/cities', async (_req, res) => {
   }
 })
 
+app.get('/api/universities', async (_req, res) => {
+  try {
+    const data = await cached('universities', 12 * 60 * 60 * 1000, () =>
+      yokFetch('/tercih-kilavuz/universiteler'),
+    )
+    res.set('Cache-Control', 'public, max-age=3600')
+    res.json(data)
+  } catch (error) {
+    logUpstreamError('University catalog error', error)
+    res.status(502).json({ message: 'University catalog is temporarily unavailable.' })
+  }
+})
+
+app.post('/api/discover', async (req, res) => {
+  const {
+    scoreTypes = [],
+    page = 0,
+    size = 500,
+    direction = 'ASC',
+    universityType = null,
+    cityCodes = [],
+    universityId = null,
+    minRank = null,
+    maxRank = null,
+  } = req.body || {}
+  const normalizedPage = Number(page)
+  const normalizedSize = Math.min(500, Math.max(20, Number(size) || 500))
+  const normalizedDirection = ['ASC', 'DESC'].includes(direction) ? direction : null
+  const validScoreTypes = new Set(['TYT', 'SAY', 'EA', 'SÖZ', 'DİL'])
+  const normalizedScoreTypes = [...new Set(
+    (Array.isArray(scoreTypes) ? scoreTypes : [])
+      .map(scoreTypeKey)
+      .filter((type) => validScoreTypes.has(type)),
+  )]
+  const normalizedCityCodes = (Array.isArray(cityCodes) ? cityCodes : [])
+    .slice(0, 81)
+    .map(Number)
+    .filter((code) => Number.isInteger(code) && code >= 1 && code <= 81)
+  const normalizedUniversityId = universityId == null || universityId === '' ? null : Number(universityId)
+  const normalizedMinRank = minRank == null || minRank === '' ? null : Number(minRank)
+  const normalizedMaxRank = maxRank == null || maxRank === '' ? null : Number(maxRank)
+  const validUniversityTypes = new Set([null, 'DEVLET', 'VAKIF'])
+  const validOptionalRank = (value) => value == null
+    || (Number.isSafeInteger(value) && value >= 1 && value <= 10_000_000)
+
+  if (
+    !Number.isInteger(normalizedPage)
+    || normalizedPage < 0
+    || normalizedPage > 20
+    || !normalizedDirection
+    || !validUniversityTypes.has(universityType)
+    || (normalizedUniversityId != null && (!Number.isSafeInteger(normalizedUniversityId) || normalizedUniversityId < 1))
+    || !validOptionalRank(normalizedMinRank)
+    || !validOptionalRank(normalizedMaxRank)
+    || (normalizedMinRank != null && normalizedMaxRank != null && normalizedMinRank > normalizedMaxRank)
+  ) {
+    return res.status(400).json({ message: 'Invalid discovery filters.' })
+  }
+
+  const requestedTypes = normalizedScoreTypes.length ? normalizedScoreTypes : [null]
+  const perTypeSize = Math.max(20, Math.ceil(normalizedSize / requestedTypes.length))
+  const payloads = requestedTypes.map((scoreType) => buildDiscoverPayload({
+    scoreType,
+    page: normalizedPage,
+    size: perTypeSize,
+    direction: normalizedDirection,
+    universityType,
+    cityCodes: normalizedCityCodes,
+    universityId: normalizedUniversityId,
+    minRank: normalizedMinRank,
+    maxRank: normalizedMaxRank,
+  }))
+
+  try {
+    const responses = await Promise.all(payloads.map((payload) => {
+      const key = `discover:${JSON.stringify(payload)}`
+      return cached(key, 30 * 60 * 1000, () =>
+        yokFetchRankWindow(payload))
+    }))
+    const merged = new Map()
+    responses.forEach((data) => {
+      const rows = data.content || []
+      rows.forEach((row) => merged.set(String(row.kilavuzKodu), row))
+    })
+    const content = [...merged.values()]
+      .sort((a, b) => {
+        const aRank = Number(a.basariSirasi) || (normalizedDirection === 'DESC' ? -Infinity : Infinity)
+        const bRank = Number(b.basariSirasi) || (normalizedDirection === 'DESC' ? -Infinity : Infinity)
+        return normalizedDirection === 'DESC' ? bRank - aRank : aRank - bRank
+      })
+      .slice(0, normalizedSize)
+    res.json({
+      content,
+      totalElements: responses.reduce((sum, data) => sum + (Number(data.totalElements) || 0), 0),
+      number: normalizedPage,
+      size: normalizedSize,
+    })
+  } catch (error) {
+    logUpstreamError('Admissions discovery error', error)
+    res.status(502).json({ message: 'Admissions data is temporarily unavailable.' })
+  }
+})
+
 app.post('/api/search', async (req, res) => {
   const {
     programId,
     scoreType,
     page = 0,
     size = 500,
+    direction = 'ASC',
     universityType = null,
     cityCode = null,
     cityCodes = null,
+    universityId = null,
+    minRank = null,
+    maxRank = null,
   } = req.body || {}
   const normalizedProgramId = Number(programId)
   const normalizedScoreType = scoreTypeKey(scoreType)
   const normalizedPage = Number(page)
+  const normalizedDirection = ['ASC', 'DESC'].includes(direction) ? direction : null
   const validScoreTypes = new Set(['TYT', 'SAY', 'EA', 'SÖZ', 'DİL'])
   const validUniversityTypes = new Set([null, 'DEVLET', 'VAKIF'])
+  const normalizedUniversityId = universityId == null || universityId === '' ? null : Number(universityId)
+  const normalizedMinRank = minRank == null || minRank === '' ? null : Number(minRank)
+  const normalizedMaxRank = maxRank == null || maxRank === '' ? null : Number(maxRank)
+  const validOptionalRank = (value) => value == null
+    || (Number.isSafeInteger(value) && value >= 1 && value <= 10_000_000)
   if (
     !Number.isSafeInteger(normalizedProgramId)
     || normalizedProgramId < 1
@@ -1161,7 +1565,12 @@ app.post('/api/search', async (req, res) => {
     || !Number.isInteger(normalizedPage)
     || normalizedPage < 0
     || normalizedPage > 20
+    || !normalizedDirection
     || !validUniversityTypes.has(universityType)
+    || (normalizedUniversityId != null && (!Number.isSafeInteger(normalizedUniversityId) || normalizedUniversityId < 1))
+    || !validOptionalRank(normalizedMinRank)
+    || !validOptionalRank(normalizedMaxRank)
+    || (normalizedMinRank != null && normalizedMaxRank != null && normalizedMinRank > normalizedMaxRank)
   ) {
     return res.status(400).json({ message: 'Invalid search filters.' })
   }
@@ -1176,14 +1585,18 @@ app.post('/api/search', async (req, res) => {
     scoreType: normalizedScoreType,
     page: normalizedPage,
     size,
+    direction: normalizedDirection,
     universityType,
     cityCodes: normalizedCityCodes,
+    universityId: normalizedUniversityId,
+    minRank: normalizedMinRank,
+    maxRank: normalizedMaxRank,
   })
 
   const key = `search:${JSON.stringify(payload)}`
   try {
     const data = await cached(key, 30 * 60 * 1000, () =>
-      yokFetch('/tercih-kilavuz/search', { method: 'POST', body: JSON.stringify(payload) }),
+      yokFetchRankWindow(payload),
     )
     res.json(data)
   } catch (error) {
@@ -1377,13 +1790,14 @@ app.post('/api/advisor', async (req, res) => {
       }))
       .filter((program) => Number.isInteger(program.birimGrupId) && program.puanTuru),
   }
-  const history = (Array.isArray(req.body?.history) ? req.body.history : [])
-    .slice(-8)
+  const conversationHistory = (Array.isArray(req.body?.history) ? req.body.history : [])
+    .slice(-14)
     .map((item) => ({
       role: item?.role === 'assistant' ? 'assistant' : 'user',
-      content: String(item?.content || '').slice(0, 1500),
+      content: String(item?.content || '').slice(0, 900),
     }))
     .filter((item) => item.content)
+  const history = conversationHistory.slice(-6)
   const previousRecommendationCodes = (Array.isArray(req.body?.previousRecommendationCodes)
     ? req.body.previousRecommendationCodes
     : [])
@@ -1417,6 +1831,8 @@ app.post('/api/advisor', async (req, res) => {
       /^\d+$/.test(context.code)
       && ['TYT', 'SAY', 'EA', 'SÖZ', 'DİL'].includes(context.scoreType)
       && context.candidateRank)
+  const conversation = resolveAdvisorConversationProfile(profile, conversationHistory, message)
+  Object.assign(profile, conversation.profile)
   const rankOverride = inferAdvisorRankOverride(message, profile, previousRecommendationScoreTypes)
   if (rankOverride) {
     profile.ranks = {
@@ -1424,7 +1840,12 @@ app.post('/api/advisor', async (req, res) => {
       [rankOverride.scoreType]: rankOverride.rank,
     }
   }
-  const intent = resolveAdvisorIntent(message, requestedIntent, previousRecommendationCodes)
+  const intent = resolveAdvisorIntent(
+    message,
+    requestedIntent,
+    previousRecommendationCodes,
+    conversationHistory,
+  )
   const requestedCount = requestedAdvisorRecommendationCount(message, intent)
 
   if (!message && !profile.interests) {
@@ -1453,7 +1874,7 @@ app.post('/api/advisor', async (req, res) => {
   try {
     const grounded = await getAdvisorCandidates(
       profile,
-      message,
+      conversation.contextText,
       intent,
       previousRecommendationCodes,
       previousRecommendationUniversities,
@@ -1464,7 +1885,12 @@ app.post('/api/advisor', async (req, res) => {
     const result = await openAIAdvisor(payload)
     if (!result.answer) throw new Error('OpenAI returned an empty response.')
     res.json({
-      answer: enforceAdvisorFitLabels(result.answer, grounded.recommendations, language),
+      answer: ensureAdvisorRecommendationCoverage(
+        result.answer,
+        grounded.recommendations,
+        intent,
+        language,
+      ),
       sources: result.sources,
       recommendations: shouldReturnAdvisorRecommendationMetadata(intent)
         ? grounded.recommendations
@@ -1503,13 +1929,17 @@ export {
   advisorSelectionBand,
   advisorSuggestionStep,
   classifyAdvisorFit,
+  descendingRankWindowPages,
   enforceAdvisorFitLabels,
+  ensureAdvisorRecommendationCoverage,
   filterFreshAdvisorRows,
+  findAdvisorPrograms,
   inferAdvisorRankOverride,
   inferAdvisorIntent,
   isGreetingOnly,
   normalizeReviewRatings,
   requestedAdvisorRecommendationCount,
+  resolveAdvisorConversationProfile,
   resolveAdvisorIntent,
   reviewSummaryData,
   selectAdvisorRecommendations,

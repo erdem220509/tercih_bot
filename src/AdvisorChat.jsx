@@ -527,22 +527,23 @@ export default function AdvisorChat({ uiLanguage, currentFilters, openSignal = 0
             )}
           </div>
 
-          <div className="advisor-quick-prompts">
-            <span>{c.popularQuestions}</span>
-            {quickPrompts.map((prompt) => (
-              <button
-                type="button"
-                key={prompt.label}
-                onClick={() => {
-                  posthog.capture('advisor_quick_prompt_clicked', { intent: prompt.intent })
-                  sendMessage(prompt.label, prompt.intent)
-                }}
-                disabled={loading}
-              >
-                {prompt.label}
-              </button>
-            ))}
-          </div>
+          {messages.length === 0 && !loading && (
+            <div className="advisor-quick-prompts">
+              <span>{c.popularQuestions}</span>
+              {quickPrompts.map((prompt) => (
+                <button
+                  type="button"
+                  key={prompt.label}
+                  onClick={() => {
+                    posthog.capture('advisor_quick_prompt_clicked', { intent: prompt.intent })
+                    sendMessage(prompt.label, prompt.intent)
+                  }}
+                >
+                  {prompt.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <form className="advisor-composer" onSubmit={(event) => { event.preventDefault(); sendMessage() }}>
             <textarea
