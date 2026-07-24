@@ -112,6 +112,11 @@ const COPY = {
       'AI placement recommendations use official statistics',
     ],
     trustTitle: 'Verified data',
+    entryNoticeKicker: 'Important estimate notice',
+    entryNoticeTitle: 'Your choices remain yours.',
+    entryNoticeBody: 'Pusula’s 2026 rankings, ranges, match labels and AI suggestions are statistical estimates for planning. They are not official results, admission probabilities or placement guarantees.',
+    entryNoticeResponsibility: 'Actual outcomes can change with exam results, quotas, demand and program conditions. Pusula does not make preference decisions on your behalf and is not responsible for choices or outcomes based on these estimates. Verify every decision against the current ÖSYM guide and official university sources.',
+    entryNoticeConfirm: 'I understand — continue',
   },
   tr: {
     jumpToPrograms: 'Bölüm seçmeye başla',
@@ -173,7 +178,56 @@ const COPY = {
       'AI yerleştirme önerileri resmî istatistiklere dayanır',
     ],
     trustTitle: 'Doğrulanmış veri',
+    entryNoticeKicker: 'Önemli tahmin bilgilendirmesi',
+    entryNoticeTitle: 'Tercihlerinin sorumluluğu sana aittir.',
+    entryNoticeBody: 'Pusula’daki 2026 sıralamaları, aralıklar, uygunluk etiketleri ve yapay zekâ önerileri planlama amacıyla sunulan istatistiksel tahminlerdir. Resmî sonuç, yerleşme olasılığı veya yerleşme garantisi değildir.',
+    entryNoticeResponsibility: 'Gerçek sonuçlar sınav sonuçları, kontenjanlar, aday talebi ve program koşullarıyla değişebilir. Pusula senin adına tercih kararı vermez ve bu tahminlere dayanılarak verilen kararların veya sonuçlarının sorumluluğunu üstlenmez. Her kararını güncel ÖSYM kılavuzu ve üniversitelerin resmî kaynaklarıyla doğrula.',
+    entryNoticeConfirm: 'Anladım, devam et',
   },
+}
+
+const ENTRY_NOTICE_STORAGE_KEY = 'pusula-estimate-notice-v1'
+
+function shouldShowEntryNotice() {
+  try {
+    return sessionStorage.getItem(ENTRY_NOTICE_STORAGE_KEY) !== 'acknowledged'
+  } catch {
+    return true
+  }
+}
+
+function EntryNotice({ c, buttonRef, onConfirm }) {
+  return (
+    <div className="entry-notice-backdrop">
+      <section
+        className="entry-notice"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="entry-notice-title"
+        aria-describedby="entry-notice-description"
+        onKeyDown={(event) => {
+          if (event.key === 'Tab') {
+            event.preventDefault()
+            buttonRef.current?.focus()
+          }
+        }}
+      >
+        <div className="entry-notice-mark" aria-hidden="true"><ShieldCheck size={24} /></div>
+        <div className="entry-notice-content">
+          <p className="entry-notice-kicker">{c.entryNoticeKicker}</p>
+          <h2 id="entry-notice-title">{c.entryNoticeTitle}</h2>
+          <div id="entry-notice-description" className="entry-notice-copy">
+            <p>{c.entryNoticeBody}</p>
+            <p>{c.entryNoticeResponsibility}</p>
+          </div>
+          <button ref={buttonRef} type="button" onClick={onConfirm}>
+            <Check size={17} aria-hidden="true" />
+            {c.entryNoticeConfirm}
+          </button>
+        </div>
+      </section>
+    </div>
+  )
 }
 
 function LanguageFlag({ country }) {
@@ -798,9 +852,11 @@ export default function App() {
   const [advisorOpenSignal, setAdvisorOpenSignal] = useState(0)
   const [favoritePrograms, setFavoritePrograms] = useState(loadFavoritePrograms)
   const [showSavedOnly, setShowSavedOnly] = useState(false)
+  const [entryNoticeOpen, setEntryNoticeOpen] = useState(shouldShowEntryNotice)
   const searchRequestRef = useRef(0)
   const lastSearchRef = useRef(null)
   const preferenceBarRef = useRef(null)
+  const entryNoticeButtonRef = useRef(null)
   const c = COPY[uiLanguage] || COPY.en
   const favoriteKeys = useMemo(
     () => new Set(favoritePrograms.map((item) => item.key)),
@@ -929,6 +985,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favoritePrograms))
   }, [favoritePrograms])
+
+  useEffect(() => {
+    if (!entryNoticeOpen) return undefined
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    entryNoticeButtonRef.current?.focus()
+    return () => { document.body.style.overflow = previousOverflow }
+  }, [entryNoticeOpen])
 
   const filteredResults = useMemo(() => {
     const needle = resultQuery.toLocaleLowerCase('tr-TR').trim()
@@ -1076,8 +1140,21 @@ export default function App() {
     })
   }
 
+  const acknowledgeEntryNotice = () => {
+    try {
+      sessionStorage.setItem(ENTRY_NOTICE_STORAGE_KEY, 'acknowledged')
+    } catch {
+      // The notice can still be dismissed when browser storage is unavailable.
+    }
+    posthog.capture('estimate_notice_acknowledged', { language: uiLanguage })
+    setEntryNoticeOpen(false)
+  }
+
   return (
     <div className="app-shell" data-theme={theme.toLocaleLowerCase('en-US')}>
+      {entryNoticeOpen && (
+        <EntryNotice c={c} buttonRef={entryNoticeButtonRef} onConfirm={acknowledgeEntryNotice} />
+      )}
       <header className="topbar">
         <a className="brand" href="#top" aria-label={c.home}>
           <span className="brand-mark" aria-hidden="true"><img src="/favicon.png?v=2" alt="" /></span>
