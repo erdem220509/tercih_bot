@@ -1239,6 +1239,66 @@
   line-height: 1.5;
 }
 
+.tuition-summary {
+  display: grid;
+  grid-template-columns: minmax(240px, .8fr) minmax(260px, 1.2fr);
+  border-block: 1px solid var(--line);
+}
+
+.tuition-payable,
+.tuition-calculation {
+  min-height: 104px;
+  padding: 19px 22px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.tuition-payable {
+  border-right: 1px solid var(--line);
+  background: #edf3ff;
+}
+
+.tuition-payable span,
+.tuition-calculation > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .8px;
+  text-transform: uppercase;
+}
+
+.tuition-payable strong {
+  margin-top: 7px;
+  color: #153f89;
+  font: 500 clamp(25px, 3vw, 34px) Georgia, serif;
+  letter-spacing: -.8px;
+}
+
+.tuition-calculation p {
+  margin: 9px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px 16px;
+}
+
+.tuition-calculation b { color: var(--blue); font-size: 13px; }
+.tuition-calculation small { color: var(--muted); font-size: 10px; }
+
+.tuition-note {
+  max-width: 920px;
+  margin: 12px 0 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.tuition-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--blue); }
+
 .city-trigger {
   width: 100%;
   height: 47px;
@@ -1957,6 +2017,13 @@ html[data-theme="dark"] .estimate-note {
 
 html[data-theme="dark"] .estimate-note p { color: #dfbfc0; }
 
+html[data-theme="dark"] .tuition-payable {
+  border-color: var(--line);
+  background: #1d2b43;
+}
+
+html[data-theme="dark"] .tuition-payable strong { color: #9ab6ff; }
+
 html[data-theme="dark"] .rank-estimate-preview {
   color: #ffaaa7;
 }
@@ -2073,6 +2140,19 @@ html[data-theme="dark"] .method-note {
   .rank-estimate-mobile { width: 74px; }
   .rank-estimate-preview b { font-size: 16px; }
   .favorite-button { right: 1px; }
+
+  .tuition-summary { grid-template-columns: 1fr; }
+
+  .tuition-payable,
+  .tuition-calculation {
+    min-height: 0;
+    padding: 17px 16px;
+  }
+
+  .tuition-payable {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -4,6 +4,7 @@ import posthog from 'posthog-js'
 import {
   ArrowDown,
   ArrowUp,
+  Banknote,
   BookOpen,
   Check,
   ChevronDown,
@@ -34,6 +35,7 @@ import {
 } from './favorites'
 import { estimateProgramRanking, programGuideQuota, programPlacementHistory } from './rankingEstimate'
 import { buildTrendPoints } from './trend'
+import { calculateProgramTuition } from './tuition'
 
 const YEARS = [2022, 2023, 2024, 2025]
 const SCORE_TYPES = ['TYT', 'SAY', 'EA', 'SÖZ', 'DİL']
@@ -106,6 +108,11 @@ const COPY = {
     savedEmpty: 'None of your saved program options appear in these results.',
     savedEmptyHelp: 'Turn off the saved filter or search for another program.',
     studentReviews: 'Student reviews',
+    tuition: 'Annual tuition',
+    tuitionAfterDiscount: 'Annual tuition after listed discount',
+    fullTuition: 'Full tuition',
+    discountApplied: 'discount applied',
+    tuitionNote: 'Calculated from the VAT-inclusive full annual tuition published in the YÖK preference guide. Payment plans, additional charges and university-specific conditions are not included; confirm the final amount with the university.',
     trustItems: [
       'Uses official YÖK Atlas data',
       'Placement data refreshes automatically',
@@ -172,6 +179,11 @@ const COPY = {
     savedEmpty: 'Kaydettiğin program seçenekleri bu sonuçlarda yer almıyor.',
     savedEmptyHelp: 'Kaydedilenler filtresini kapat veya başka bir bölüm ara.',
     studentReviews: 'Öğrenci değerlendirmeleri',
+    tuition: 'Yıllık öğrenim ücreti',
+    tuitionAfterDiscount: 'İndirim sonrası yıllık ücret',
+    fullTuition: 'Tam ücret',
+    discountApplied: 'indirim uygulandı',
+    tuitionNote: 'YÖK tercih kılavuzunda yayımlanan KDV dâhil yıllık tam ücret üzerinden hesaplanır. Ödeme planları, ek ücretler ve üniversiteye özel koşullar dâhil değildir; kesin tutarı üniversiteden doğrula.',
     trustItems: [
       'Resmî YÖK Atlas verilerini kullanır',
       'Yerleştirme verileri otomatik güncellenir',
@@ -700,6 +712,37 @@ function RankEstimatePreview({ estimate, c, className = '' }) {
   )
 }
 
+function TuitionPanel({ row, c, uiLanguage }) {
+  const tuition = calculateProgramTuition(row)
+  if (!tuition) return null
+
+  const formatCurrency = (value) => new Intl.NumberFormat(uiLanguage === 'tr' ? 'tr-TR' : 'en-US', {
+    style: 'currency',
+    currency: 'TRY',
+    currencyDisplay: 'narrowSymbol',
+    maximumFractionDigits: 0,
+  }).format(value)
+
+  return (
+    <section className="tuition-section">
+      <div className="section-kicker"><Banknote size={16} /> {c.tuition}</div>
+      <div className="tuition-summary">
+        <div className="tuition-payable">
+          <span>{tuition.academicYear ? `${tuition.academicYear} · ` : ''}{c.tuitionAfterDiscount}</span>
+          <strong>{formatCurrency(tuition.payableTuition)}</strong>
+        </div>
+        <div className="tuition-calculation">
+          <span>{row.bursOraniAdi}</span>
+          {tuition.discountPercent > 0 && (
+            <p><b>%{tuition.discountPercent} {c.discountApplied}</b><small>{c.fullTuition}: {formatCurrency(tuition.fullTuition)}</small></p>
+          )}
+        </div>
+      </div>
+      <p className="tuition-note"><Info size={14} /> <span>{c.tuitionNote}</span></p>
+    </section>
+  )
+}
+
 function ResultRow({ row, userRanks, rankingEstimate, expanded, onToggle, favorite, onFavorite, c, uiLanguage }) {
   const history = yearData(row)
   const guideQuota = programGuideQuota(row)
@@ -791,6 +834,7 @@ function ResultRow({ row, userRanks, rankingEstimate, expanded, onToggle, favori
               </div>
             )}
           </section>
+          <TuitionPanel row={row} c={c} uiLanguage={uiLanguage} />
           <section>
             <div className="section-kicker"><BookOpen size={16} /> {c.lastStudent}</div>
             <NetBreakdown programCode={row.kilavuzKodu} c={c} uiLanguage={uiLanguage} />

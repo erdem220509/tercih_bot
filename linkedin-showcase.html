@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/favicon.png?v=2" />
+    <title>Pusula — 2026 Ürün Güncellemesi</title>
+    <style>
+      :root {
+        font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #172019;
+        background: #111712;
+        font-synthesis: none;
+        --ink: #172019;
+        --muted: #667168;
+        --paper: #f3f0e8;
+        --surface: #fbfaf6;
+        --line: #d7d5cc;
+        --blue: #1758e8;
+        --pale-blue: #eaf0ff;
+        --red: #9c3338;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        min-height: 100vh;
+        display: grid;
+        place-items: start center;
+        background: #111712;
+      }
+
+      .download-png {
+        position: fixed;
+        z-index: 10;
+        top: 24px;
+        left: calc(50% + 564px);
+        min-height: 46px;
+        padding: 0 17px;
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        border: 1px solid rgb(255 255 255 / 16%);
+        background: #1d2820;
+        color: #fff;
+        box-shadow: 0 12px 30px rgb(0 0 0 / 24%);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: .3px;
+        text-decoration: none;
+        white-space: nowrap;
+        transition: transform .18s ease, background .18s ease, box-shadow .18s ease;
+      }
+
+      .download-png:hover {
+        background: var(--blue);
+        transform: translateY(-2px);
+        box-shadow: 0 15px 34px rgb(0 0 0 / 30%);
+      }
+
+      .download-png:active { transform: translateY(0); }
+
+      .download-png:focus-visible {
+        outline: 3px solid #8aabff;
+        outline-offset: 3px;
+      }
+
+      .download-png svg { flex: 0 0 auto; }
+
+      .poster {
+        width: 1080px;
+        height: 1350px;
+        padding: 62px 72px 52px;
+        overflow: hidden;
+        position: relative;
+        background:
+          linear-gradient(90deg, transparent 71px, rgb(23 32 25 / 7%) 72px, transparent 73px),
+          var(--paper);
+      }
+
+      .poster::before {
+        content: "";
+        position: absolute;
+        width: 470px;
+        height: 470px;
+        right: -170px;
+        top: -180px;
+        border: 1px solid rgb(23 32 25 / 13%);
+        border-radius: 50%;
+        box-shadow:
+          inset 0 0 0 66px var(--paper),
+          inset 0 0 0 67px rgb(23 32 25 / 10%),
+          inset 0 0 0 132px var(--paper),
+          inset 0 0 0 133px rgb(23 32 25 / 8%);
+      }
+
+      .poster::after {
+        content: "26";
+        position: absolute;
+        right: 45px;
+        bottom: -69px;
+        color: rgb(23 88 232 / 5%);
+        font: 500 270px/.8 Georgia, serif;
+        letter-spacing: -20px;
+        pointer-events: none;
+      }
+
+      .masthead,
+      .hero,
+      .product-frame,
+      .proof-row,
+      .footer { position: relative; z-index: 1; }
+
+      .masthead {
+        height: 72px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        font: 700 28px Georgia, serif;
+        letter-spacing: -1px;
+      }
+
+      .brand img {
+        width: 39px;
+        height: 39px;
+        border-radius: 50% 50% 50% 14%;
+      }
+
+      .update-label {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 1.6px;
+        text-transform: uppercase;
+      }
+
+      .update-label i,
+      .source i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #1fa66a;
+        box-shadow: 0 0 0 4px rgb(31 166 106 / 13%);
+      }
+
+      .hero {
+        padding: 45px 0 42px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 205px;
+        align-items: end;
+        gap: 48px;
+        animation: rise-in .55s ease both;
+      }
+
+      .hero small {
+        display: block;
+        margin-bottom: 15px;
+        color: var(--blue);
+        font-size: 11px;
+        font-weight: 850;
+        letter-spacing: 1.8px;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 710px;
+        margin: 0;
+        font: 500 68px/.94 Georgia, serif;
+        letter-spacing: -3.4px;
+      }
+
+      h1 em { color: var(--blue); font-weight: 500; }
+
+      .hero-note {
+        margin: 0 0 4px;
+        padding-left: 18px;
+        border-left: 2px solid var(--blue);
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .product-frame {
+        height: 600px;
+        overflow: hidden;
+        border: 1px solid #c7c8c1;
+        background: var(--surface);
+        box-shadow: 0 30px 70px rgb(17 23 18 / 16%);
+        animation: product-in .65s .08s cubic-bezier(.2, .8, .2, 1) both;
+      }
+
+      .product-topbar {
+        height: 56px;
+        padding: 0 23px;
+        display: flex;
+        align-items: center;
+        background: var(--ink);
+        color: #fff;
+      }
+
+      .mini-brand { font: 700 17px Georgia, serif; }
+
+      .source {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: #c1c9c2;
+        font-size: 9px;
+        font-weight: 750;
+        letter-spacing: .9px;
+        text-transform: uppercase;
+      }
+
+      .program-head {
+        height: 139px;
+        padding: 24px 26px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 26px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .program-head > div:first-child > span {
+        color: var(--blue);
+        font-size: 9px;
+        font-weight: 850;
+        letter-spacing: 1.3px;
+        text-transform: uppercase;
+      }
+
+      .program-head h2 {
+        margin: 8px 0 5px;
+        font-size: 19px;
+        line-height: 1.2;
+      }
+
+      .program-head p { margin: 0; color: var(--muted); font-size: 11px; }
+
+      .program-tags { display: flex; align-items: center; gap: 7px; }
+
+      .program-tags span {
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 750;
+      }
+
+      .product-main {
+        height: 330px;
+        padding: 26px;
+        display: grid;
+        grid-template-columns: 1.02fr .98fr;
+        gap: 28px;
+      }
+
+      .section-label {
+        margin-bottom: 15px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 850;
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+      }
+
+      .section-label::before {
+        content: "";
+        width: 16px;
+        height: 2px;
+        background: var(--blue);
+      }
+
+      .ranking-panel { padding-right: 26px; border-right: 1px solid var(--line); }
+
+      .rank-hero {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border-block: 1px solid var(--line);
+      }
+
+      .rank-hero > div { padding: 15px 13px 14px; }
+
+      .rank-hero > div + div { border-left: 1px solid var(--line); background: var(--pale-blue); }
+
+      .rank-hero span,
+      .fee-primary span {
+        display: block;
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 750;
+        letter-spacing: .8px;
+        text-transform: uppercase;
+      }
+
+      .rank-hero strong {
+        display: block;
+        margin-top: 6px;
+        font: 500 29px Georgia, serif;
+      }
+
+      .rank-hero > div + div strong { color: var(--blue); }
+
+      .trend-chart { height: 112px; margin-top: 15px; position: relative; }
+
+      .trend-chart svg { width: 100%; height: 80px; overflow: visible; }
+
+      .trend-line {
+        stroke-dasharray: 600;
+        stroke-dashoffset: 600;
+        animation: draw-line 1.1s .45s ease forwards;
+      }
+
+      .trend-years {
+        margin-top: 5px;
+        display: flex;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 8px;
+      }
+
+      .range {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .range b { color: var(--red); }
+
+      .fee-panel { min-width: 0; }
+
+      .fee-primary {
+        padding: 22px 21px;
+        background: var(--pale-blue);
+        border-top: 3px solid var(--blue);
+      }
+
+      .fee-primary strong {
+        display: block;
+        margin-top: 8px;
+        color: #133f90;
+        font: 500 42px Georgia, serif;
+        letter-spacing: -1.6px;
+      }
+
+      .fee-math {
+        padding: 17px 20px;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr auto 1fr;
+        align-items: center;
+        gap: 9px;
+        border: 1px solid var(--line);
+        border-top: 0;
+      }
+
+      .fee-math div { min-width: 0; }
+
+      .fee-math span { display: block; color: var(--muted); font-size: 7px; text-transform: uppercase; }
+
+      .fee-math b { display: block; margin-top: 4px; font-size: 12px; white-space: nowrap; }
+
+      .fee-math > b { color: var(--blue); font-size: 13px; }
+
+      .fee-note {
+        margin: 14px 0 0;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.45;
+      }
+
+      .disclaimer {
+        height: 75px;
+        padding: 0 26px;
+        display: grid;
+        grid-template-columns: 34px 1fr auto;
+        align-items: center;
+        gap: 14px;
+        border-top: 1px solid #e5c6c7;
+        background: #fbf3f2;
+        color: var(--red);
+      }
+
+      .shield {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #d9adaf;
+        border-radius: 50%;
+        font-weight: 900;
+      }
+
+      .disclaimer strong { display: block; font-size: 10px; }
+
+      .disclaimer p { margin: 3px 0 0; color: #77585a; font-size: 8px; }
+
+      .disclaimer > span:last-child {
+        padding: 7px 10px;
+        border: 1px solid #d9adaf;
+        font-size: 8px;
+        font-weight: 850;
+        letter-spacing: .6px;
+        text-transform: uppercase;
+      }
+
+      .proof-row {
+        min-height: 184px;
+        padding-top: 35px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0;
+      }
+
+      .proof {
+        padding: 0 25px;
+        border-left: 1px solid var(--line);
+        transition: transform .2s ease;
+      }
+
+      .proof:first-child { padding-left: 0; border: 0; }
+      .proof:last-child { padding-right: 0; }
+      .proof:hover { transform: translateY(-3px); }
+
+      .proof b {
+        display: block;
+        margin-bottom: 10px;
+        color: var(--blue);
+        font: 500 27px Georgia, serif;
+      }
+
+      .proof strong { display: block; font-size: 13px; }
+
+      .proof p {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.5;
+      }
+
+      .footer {
+        height: 42px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        border-top: 1px solid var(--ink);
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 750;
+        letter-spacing: .7px;
+        text-transform: uppercase;
+      }
+
+      .footer strong { color: var(--ink); }
+
+      @keyframes rise-in {
+        from { opacity: 0; transform: translateY(12px); }
+      }
+
+      @keyframes product-in {
+        from { opacity: 0; transform: translateY(18px) scale(.992); }
+      }
+
+      @keyframes draw-line { to { stroke-dashoffset: 0; } }
+
+      @media (max-width: 1080px) {
+        body { place-items: start; }
+        .poster { transform-origin: top left; }
+      }
+
+      @media (max-width: 1320px) {
+        .download-png {
+          top: auto;
+          right: 18px;
+          bottom: 18px;
+          left: auto;
+        }
+      }
+
+      @media print {
+        .download-png { display: none; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <a
+      class="download-png"
+      href="/output/playwright/linkedin-showcase.png"
+      download="pusula-2026-urun-guncellemesi.png"
+      aria-label="LinkedIn görselini PNG olarak indir"
+    >
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" />
+      </svg>
+      PNG olarak indir
+    </a>
+    <main class="poster">
+      <header class="masthead">
+        <div class="brand"><img src="/favicon.png?v=2" alt="" /> Pusula</div>
+        <div class="update-label"><i></i> 2026 ürün güncellemesi</div>
+      </header>
+
+      <section class="hero">
+        <div>
+          <small>Daha şeffaf tercih desteği</small>
+          <h1>Tahminleri daha açık, ücretleri <em>daha gerçek.</em></h1>
+        </div>
+        <p class="hero-note">Sıralama eğilimi, belirsizlik ve burs sonrası ödenecek tutar artık aynı yerde.</p>
+      </section>
+
+      <section class="product-frame" aria-label="Pusula ürün özellikleri örneği">
+        <div class="product-topbar">
+          <span class="mini-brand">Pusula</span>
+          <span class="source"><i></i> Resmî YÖK Atlas verileri</span>
+        </div>
+
+        <div class="program-head">
+          <div>
+            <span>Program detayı</span>
+            <h2>İhsan Doğramacı Bilkent Üniversitesi</h2>
+            <p>Hukuk Fakültesi · Hukuk (%50 İndirimli)</p>
+          </div>
+          <div class="program-tags"><span>ANKARA</span><span>EA</span><span>VAKIF</span></div>
+        </div>
+
+        <div class="product-main">
+          <div class="ranking-panel">
+            <div class="section-label">Sıralama eğilimi</div>
+            <div class="rank-hero">
+              <div><span>2025 taban sıralama</span><strong>1.548</strong></div>
+              <div><span>2026 istatistiksel tahmin</span><strong>≈ 1.410</strong></div>
+            </div>
+            <div class="trend-chart">
+              <svg viewBox="0 0 380 80" role="img" aria-label="2022 ile 2025 sıralama eğilimi">
+                <path d="M8 42H372" fill="none" stroke="#d7d5cc" stroke-width="1" stroke-dasharray="3 5" />
+                <polyline class="trend-line" points="8,34 128,64 248,59 372,43" fill="none" stroke="#1758e8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+                <g fill="#fbfaf6" stroke="#1758e8" stroke-width="2.5">
+                  <circle cx="8" cy="34" r="5" /><circle cx="128" cy="64" r="5" /><circle cx="248" cy="59" r="5" /><circle cx="372" cy="43" r="5" />
+                </g>
+              </svg>
+              <div class="trend-years"><span>2022 · 1.689</span><span>2023 · 1.262</span><span>2024 · 1.191</span><span>2025 · 1.548</span></div>
+            </div>
+            <div class="range"><span>Yaklaşık senaryo aralığı</span><b>1.150 — 1.720</b></div>
+          </div>
+
+          <div class="fee-panel">
+            <div class="section-label">2026–2027 öğrenim ücreti</div>
+            <div class="fee-primary">
+              <span>İndirim sonrası yıllık ücret</span>
+              <strong>₺647.500</strong>
+            </div>
+            <div class="fee-math">
+              <div><span>Tam ücret</span><b>₺1.295.000</b></div>
+              <b>×</b>
+              <div><span>Ödenecek oran</span><b>%50</b></div>
+              <b>=</b>
+              <div><span>Net tutar</span><b>₺647.500</b></div>
+            </div>
+            <p class="fee-note">YÖK kılavuzundaki KDV dâhil yıllık tam ücret üzerinden hesaplandı. Eksik veri varsa tutar gösterilmez.</p>
+          </div>
+        </div>
+
+        <div class="disclaimer">
+          <span class="shield">!</span>
+          <div><strong>İstatistiksel tahmindir — tercih garantisi değildir.</strong><p>Sonuçlar değişebilir; her karar güncel ÖSYM kılavuzu ve resmî kaynaklarla doğrulanmalıdır.</p></div>
+          <span>Karar sende</span>
+        </div>
+      </section>
+
+      <section class="proof-row" aria-label="Güncelleme özeti">
+        <div class="proof"><b>01</b><strong>4 yıllık eğilim</strong><p>2022–2025 yerleştirme verileri tek bakışta karşılaştırılıyor.</p></div>
+        <div class="proof"><b>02</b><strong>Burs sonrası gerçek tutar</strong><p>%25 ve %50 indirimler tam yıllık ücrete otomatik uygulanıyor.</p></div>
+        <div class="proof"><b>03</b><strong>Belirsizlik açıkça görünür</strong><p>Tahmin aralığı, sorumluluk notu ve resmî kaynak uyarısı birlikte sunuluyor.</p></div>
+      </section>
+
+      <footer class="footer"><strong>unipusulam.web.app</strong><span>YKS · Tercih · Gelecek</span></footer>
+    </main>
+  </body>
+</html>
